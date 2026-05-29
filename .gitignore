@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.pt
+*.pth
+*.log
+.venv/
+venv/
+DeepHunt-env/
+res/
+output/
+data/
+
