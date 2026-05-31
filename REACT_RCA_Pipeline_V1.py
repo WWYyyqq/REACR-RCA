@@ -3,6 +3,7 @@ import json
 import os
 
 import random
+import sys
 
 import numpy as np
 import pandas as pd
@@ -49,7 +50,9 @@ def parse_args():
     parser.add_argument('--num_spatial_layers', type=int, default=2)
     parser.add_argument('--num_temporal_heads', type=int, default=1)
     parser.add_argument('--dropout', type=float, default=0.1)
-    parser.add_argument('--enable_modality_gate', action='store_true')
+    modality_group = parser.add_mutually_exclusive_group()
+    modality_group.add_argument('--enable_modality_gate', dest='enable_modality_gate', action='store_true', default=None)
+    modality_group.add_argument('--disable_modality_gate', dest='enable_modality_gate', action='store_false')
     parser.add_argument('--modality_gate_hidden_dim', type=int, default=64)
     parser.add_argument('--modality_gate_output_dim', type=int, default=0)
     parser.add_argument('--modality_gate_fusion_mode', choices=['encoded', 'raw_residual'], default='encoded')
@@ -57,7 +60,9 @@ def parse_args():
     parser.add_argument('--disable_modality_gaussian_bias', action='store_true')
     parser.add_argument('--disable_temporal_attention', action='store_true')
     parser.add_argument('--anomaly_hidden_dim', type=int, default=64)
-    parser.add_argument('--enable_change_point_branch', action='store_true')
+    change_point_group = parser.add_mutually_exclusive_group()
+    change_point_group.add_argument('--enable_change_point_branch', dest='enable_change_point_branch', action='store_true', default=None)
+    change_point_group.add_argument('--disable_change_point_branch', dest='enable_change_point_branch', action='store_false')
     parser.add_argument('--change_point_weight', type=float, default=1.0)
     parser.add_argument('--causal_hidden_dim', type=int, default=64)
     parser.add_argument('--causal_max_lag', type=int, default=3)
@@ -72,6 +77,7 @@ def parse_args():
     parser.add_argument('--train_weight_decay', type=float, default=0.0)
     parser.add_argument('--train_patience', type=int, default=10)
     parser.add_argument('--feedback_sample_ratio', type=float, default=-1.0)
+    parser.add_argument('--test_start_ratio', type=float, default=0.5)
     parser.add_argument('--case_split_protocol', choices=['legacy', 'fair'], default='legacy')
     parser.add_argument('--export_event_chains', action='store_true')
     parser.add_argument('--event_chain_topk', type=int, default=3)
@@ -84,7 +90,43 @@ def parse_args():
     parser.add_argument('--seed', type=int, default=-1)
     parser.add_argument('--tag', default='')
     parser.add_argument('--output_dir', default='')
-    return parser.parse_args()
+    args = parser.parse_args()
+    apply_fair_defaults(args)
+    return args
+
+
+def _arg_was_provided(flag: str) -> bool:
+    return flag in sys.argv[1:]
+
+
+def apply_fair_defaults(args):
+    if args.dataset == 'D2' and args.case_split_protocol == 'fair':
+        recipe_defaults = {
+            '--train_epochs': ('train_epochs', 20),
+            '--train_patience': ('train_patience', 8),
+            '--change_point_weight': ('change_point_weight', 0.05),
+            '--causal_hidden_dim': ('causal_hidden_dim', 16),
+            '--causal_gamma': ('causal_gamma', 0.2),
+            '--causal_kernel_size': ('causal_kernel_size', 3),
+            '--modality_gate_fusion_mode': ('modality_gate_fusion_mode', 'raw_residual'),
+            '--modality_gate_residual_alpha': ('modality_gate_residual_alpha', 0.1),
+            '--dropout': ('dropout', 0.15),
+            '--branch_init_scale': ('branch_init_scale', 0.075),
+            '--train_weight_decay': ('train_weight_decay', 1e-5),
+        }
+        for flag, (attr, value) in recipe_defaults.items():
+            if not _arg_was_provided(flag):
+                setattr(args, attr, value)
+        if args.enable_change_point_branch is None:
+            args.enable_change_point_branch = True
+        if args.enable_modality_gate is None:
+            args.enable_modality_gate = True
+        return
+
+    if args.enable_change_point_branch is None:
+        args.enable_change_point_branch = False
+    if args.enable_modality_gate is None:
+        args.enable_modality_gate = False
 
 
 def set_random_seed(seed: int):
@@ -158,13 +200,19 @@ def build_model(args, feat_dim: int, node_num: int, config=None) -> DyCauRCAMode
     return DyCauRCAModel(backbone, anomaly_head, causal_head, ranker, modality_gate=modality_gate)
 
 
-def split_cases_for_training(cases, feedback_sample_ratio: float, default_ratio: float, protocol: str = 'legacy'):
+def split_cases_for_training(
+    cases,
+    feedback_sample_ratio: float,
+    default_ratio: float,
+    protocol: str = 'legacy',
+    test_start_ratio: float = 0.5,
+):
     ratio = feedback_sample_ratio if 0 < feedback_sample_ratio < 1 else default_ratio
     case_count = len(cases)
     train_end = max(int(case_count * ratio), 1)
 
     if protocol == 'fair':
-        test_start = max(int(case_count * 0.5), train_end + 1)
+        test_start = max(int(case_count * test_start_ratio), train_end + 1)
         test_start = min(test_start, case_count - 1)
         train_end = min(train_end, test_start - 1)
         train_cases = cases.iloc[:train_end].reset_index(drop=True)
@@ -173,6 +221,7 @@ def split_cases_for_training(cases, feedback_sample_ratio: float, default_ratio:
         split_meta = {
             'protocol': protocol,
             'feedback_sample_ratio': ratio,
+            'test_start_ratio': test_start_ratio,
             'train_start': 0,
             'train_end_exclusive': train_end,
             'val_start': train_end,
@@ -285,6 +334,7 @@ def main():
                 args.feedback_sample_ratio,
                 default_ratio,
                 protocol=args.case_split_protocol,
+                test_start_ratio=args.test_start_ratio,
             )
             train_case_windows = build_case_windows(train_cases, test_samples, node_hash, window_size=args.window_size)
             val_case_windows = build_case_windows(val_cases, test_samples, node_hash, window_size=args.window_size)
@@ -365,6 +415,7 @@ def main():
         'window_size': args.window_size,
         'train_stride': args.train_stride,
         'batch_size': args.batch_size,
+        'test_start_ratio': args.test_start_ratio,
         'train_window_summary': summarize_windows(train_windows),
         'case_window_summary': summarize_windows(case_windows),
         'train_batch_summary': None if train_batch is None else batch_summary(train_batch),

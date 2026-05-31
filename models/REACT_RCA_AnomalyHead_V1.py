@@ -89,7 +89,7 @@ class MultiHeadAnomalyHead(nn.Module):
 
         components = torch.stack(component_list, dim=-1)
         anomaly_score = self.fusion_head(components).squeeze(-1)
-        anomaly_score = F.relu(anomaly_score)
+        anomaly_score = F.softplus(anomaly_score)
 
         return {
             'recon_error': recon_error,

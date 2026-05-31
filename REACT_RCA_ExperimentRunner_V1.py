@@ -38,6 +38,8 @@ def parse_args():
     parser.add_argument('--alphas', nargs='+', type=float, default=[0.01, 0.02, 0.05, 0.10])
     parser.add_argument('--epochs_grid', nargs='+', type=int, default=[10, 20])
     parser.add_argument('--confirm_topn', type=int, default=3)
+    parser.add_argument('--train_ratio', type=float, default=0.3)
+    parser.add_argument('--test_start_ratio', type=float, default=0.5)
     return parser.parse_args()
 
 
@@ -104,7 +106,11 @@ def dataset_dycau_defaults(dataset: str):
             'causal_hidden_dim': 16,
             'causal_gamma': 0.2,
             'causal_kernel_size': 3,
-            'causal_tag': 'h16_g0p2_k3',
+            'dropout': 0.15,
+            'branch_init_scale': 0.075,
+            'train_weight_decay': 1e-5,
+            'train_patience': 8,
+            'causal_tag': 'h16_g0p2_k3_do0p15_wd1e5_b0p075',
         }
     return {
         'batch_size': 8,
@@ -134,7 +140,9 @@ def split_cases_fair(cases: pd.DataFrame, train_ratio: float = 0.3, test_start_r
     val_cases = cases.iloc[train_end:test_start].reset_index(drop=True)
     test_cases = cases.iloc[test_start:].reset_index(drop=True)
     split_meta = {
-        'protocol': 'fair_30_20_50',
+        'protocol': f'fair_{round(train_ratio * 100)}_{round((test_start_ratio - train_ratio) * 100)}_{round((1 - test_start_ratio) * 100)}',
+        'train_ratio': train_ratio,
+        'test_start_ratio': test_start_ratio,
         'train_start': 0,
         'train_end_exclusive': train_end,
         'val_start': train_end,
@@ -164,7 +172,7 @@ def top_hit(row, k: int, label_col: str):
     return False
 
 
-def run_deephunt(dataset: str, base_dir: Path, overwrite: bool):
+def run_deephunt(dataset: str, base_dir: Path, overwrite: bool, train_ratio: float = 0.3, test_start_ratio: float = 0.5):
     out_dir = method_dir(base_dir, dataset, 'deephunt', 'fair_feedback')
     if (out_dir / 'final_eval.json').exists() and not overwrite:
         return out_dir
@@ -176,7 +184,7 @@ def run_deephunt(dataset: str, base_dir: Path, overwrite: bool):
     input_samples = train_samples if config['train_samples_num'] == 'whole' else train_samples[:config['train_samples_num']]
     model = train_deephunt(input_samples, config['model_param'])
     cases = pd.read_csv(ROOT / config['path']['case_dir'])
-    train_cases, val_cases, test_cases, split_meta = split_cases_fair(cases, train_ratio=0.3, test_start_ratio=0.5)
+    train_cases, val_cases, test_cases, split_meta = split_cases_fair(cases, train_ratio=train_ratio, test_start_ratio=test_start_ratio)
     node_hash, _, _ = load_init(config['path']['graph_dir'])
 
     loss_df = deephunt_reconstruction_test(model, test_samples, node_hash, config['model_param']['feat_span'])
@@ -234,6 +242,8 @@ def run_dycau(
     device: str,
     overwrite: bool,
     export_event_chains: bool,
+    train_ratio: float = 0.3,
+    test_start_ratio: float = 0.5,
 ):
     defaults = dataset_dycau_defaults(dataset)
     rid = run_id(seed, epochs, defaults['change_point_weight'], alpha, defaults['causal_tag'])
@@ -254,13 +264,18 @@ def run_dycau(
         '--seed', str(seed),
         '--batch_size', str(defaults['batch_size']),
         '--train_epochs', str(epochs),
-        '--feedback_sample_ratio', '0.3',
+        '--feedback_sample_ratio', str(train_ratio),
+        '--test_start_ratio', str(test_start_ratio),
         '--case_split_protocol', 'fair',
         '--enable_change_point_branch',
         '--change_point_weight', str(defaults['change_point_weight']),
         '--causal_hidden_dim', str(defaults['causal_hidden_dim']),
         '--causal_gamma', str(defaults['causal_gamma']),
         '--causal_kernel_size', str(defaults['causal_kernel_size']),
+        '--dropout', str(defaults.get('dropout', 0.1)),
+        '--branch_init_scale', str(defaults.get('branch_init_scale', 0.1)),
+        '--train_weight_decay', str(defaults.get('train_weight_decay', 0.0)),
+        '--train_patience', str(defaults.get('train_patience', 10)),
         '--output_dir', str(out_dir),
     ]
     if method == 'famos_baro_coe_dycaurca':
@@ -269,6 +284,8 @@ def run_dycau(
             '--modality_gate_fusion_mode', 'raw_residual',
             '--modality_gate_residual_alpha', str(alpha),
         ])
+    else:
+        cmd.append('--disable_modality_gate')
     if export_event_chains:
         cmd.append('--export_event_chains')
 
@@ -277,7 +294,7 @@ def run_dycau(
     if cfg_path.exists():
         cfg = load_json(cfg_path)
         cfg.update({
-            'runner_protocol': 'fair_30_20_50',
+            'runner_protocol': f'fair_{round(train_ratio * 100)}_{round((test_start_ratio - train_ratio) * 100)}_{round((1 - test_start_ratio) * 100)}',
             'selection_metric_source': 'validation',
             'final_metric_source': 'test',
         })
@@ -605,7 +622,7 @@ def run_all(args):
 
     if not args.skip_deephunt:
         for dataset in args.datasets:
-            run_deephunt(dataset, base_dir, args.overwrite)
+            run_deephunt(dataset, base_dir, args.overwrite, train_ratio=args.train_ratio, test_start_ratio=args.test_start_ratio)
 
     if args.skip_dycau:
         return
@@ -623,6 +640,8 @@ def run_all(args):
                 device=args.device,
                 overwrite=args.overwrite,
                 export_event_chains=True,
+                train_ratio=args.train_ratio,
+                test_start_ratio=args.test_start_ratio,
             )
 
         screened = []
@@ -639,6 +658,8 @@ def run_all(args):
                         device=args.device,
                         overwrite=args.overwrite,
                         export_event_chains=False,
+                        train_ratio=args.train_ratio,
+                        test_start_ratio=args.test_start_ratio,
                     )
                     validation_eval = load_json(out_dir / 'validation_eval.json')
                     final_eval = load_json(out_dir / 'final_eval.json')
@@ -678,6 +699,8 @@ def run_all(args):
                     device=args.device,
                     overwrite=args.overwrite,
                     export_event_chains=True,
+                    train_ratio=args.train_ratio,
+                    test_start_ratio=args.test_start_ratio,
                 )
 
 

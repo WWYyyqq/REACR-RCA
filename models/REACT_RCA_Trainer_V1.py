@@ -138,6 +138,7 @@ def evaluate_dycau(model: DyCauRCAModel, dataloader, device: torch.device, ks=(1
     model.eval()
     losses = []
     metrics = []
+    score_stds = []
     criterion = PairwiseRankingLoss()
 
     with torch.no_grad():
@@ -149,11 +150,13 @@ def evaluate_dycau(model: DyCauRCAModel, dataloader, device: torch.device, ks=(1
             final_score = outputs['rank_output']['final_score']
             loss = criterion(final_score, labels)
             losses.append(loss.item())
+            score_stds.append(final_score.detach().float().std(dim=1).mean().item())
             metrics.append(compute_topk_metrics(final_score.cpu(), labels.cpu(), ks=ks))
 
     return {
         'loss': float(np.mean(losses)) if len(losses) > 0 else 0.0,
         'metrics': aggregate_metric_dict(metrics),
+        'score_std': float(np.mean(score_stds)) if len(score_stds) > 0 else 0.0,
     }
 
 
@@ -185,6 +188,7 @@ def train_dycau(
             metrics.get('A@1', 0.0),
             metrics.get('A@3', 0.0),
             metrics.get('A@5', 0.0),
+            eval_result.get('score_std', 0.0),
             -eval_result.get('loss', 0.0),
         )
 
@@ -245,7 +249,7 @@ def train_dycau(
         'best_epoch': best_epoch,
         'best_selection_key': list(best_key) if best_key is not None else None,
         'selection_metric_source': 'validation',
-        'selection_rule': 'A@1,A@3,A@5,-loss',
+        'selection_rule': 'A@1,A@3,A@5,score_std,-loss',
         'trained_epochs': len(history),
         'device': str(device),
     }
