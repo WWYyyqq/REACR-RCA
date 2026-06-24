@@ -18,6 +18,7 @@ class DSBGWindow:
     label: Optional[torch.Tensor] = None  # [N]
     case_id: Optional[int] = None
     case_timestamp: Optional[int] = None
+    group_id: Optional[int] = None
 
 
 def _sort_samples(samples: Sequence[Sample]) -> List[Sample]:
@@ -37,6 +38,7 @@ def _series_to_window(
     label: Optional[torch.Tensor] = None,
     case_id: Optional[int] = None,
     case_timestamp: Optional[int] = None,
+    group_id: Optional[int] = None,
 ) -> DSBGWindow:
     timestamps = [sample[0] for sample in series]
     graphs = [sample[1] for sample in series]
@@ -48,6 +50,7 @@ def _series_to_window(
         label=label,
         case_id=case_id,
         case_timestamp=case_timestamp,
+        group_id=group_id,
     )
 
 
@@ -84,8 +87,10 @@ def build_case_windows(
     sorted_samples = _sort_samples(samples)
     node_num = sorted_samples[0][1].num_nodes() if len(sorted_samples) > 0 else 0
     windows: List[DSBGWindow] = []
+    group_hash: Dict[str, int] = {}
 
-    for case_id, case in cases.reset_index(drop=True).iterrows():
+    for row_case_id, case in cases.reset_index(drop=True).iterrows():
+        case_id = int(case['case_id']) if 'case_id' in case.index else int(row_case_id)
         start_ts = case['timestamp'] - (window_size * 60) / 2
         end_ts = case['timestamp'] + (window_size * 60) / 2
 
@@ -93,6 +98,11 @@ def build_case_windows(
         for node, node_idx in node_hash.items():
             if node.startswith(case['cmdb_id']):
                 label[node_idx] = 1.0
+        group_key = str(case['cmdb_id'])
+        if 'failure_type' in case.index and case.get('failure_type') == case.get('failure_type'):
+            group_key = f"{group_key}|{case.get('failure_type')}"
+        if group_key not in group_hash:
+            group_hash[group_key] = len(group_hash)
 
         series = [sample for sample in sorted_samples if start_ts <= sample[0] < end_ts]
         if len(series) == 0 and len(sorted_samples) > 0:
@@ -104,6 +114,7 @@ def build_case_windows(
             label=label,
             case_id=case_id,
             case_timestamp=int(case['timestamp']),
+            group_id=group_hash[group_key],
         )
         windows.append(window)
         if max_cases is not None and len(windows) >= max_cases:
@@ -143,6 +154,10 @@ def collate_dsbg_windows(batch: Sequence[DSBGWindow]):
         [-1 if sample.case_timestamp is None else sample.case_timestamp for sample in batch],
         dtype=torch.long,
     )
+    group_ids = torch.tensor(
+        [-1 if sample.group_id is None else sample.group_id for sample in batch],
+        dtype=torch.long,
+    )
 
     labels = None
     if batch[0].label is not None:
@@ -155,6 +170,7 @@ def collate_dsbg_windows(batch: Sequence[DSBGWindow]):
         'labels': labels,
         'case_ids': case_ids,
         'case_timestamps': case_timestamps,
+        'group_ids': group_ids,
         'window_size': window_size,
         'batch_size': len(batch),
         'node_num': features.shape[2],

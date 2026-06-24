@@ -1,5 +1,21 @@
 # Changelog
 
+## v2.0.0-reacr-rca
+
+### Changed
+
+- Added root-symptom disentangled ranking with source, victim, and incoming
+  explainedness evidence.
+- Added counterfactual propagation coverage and residual correction using the
+  lag-aware causal matrix.
+- Added role diagnostics for root-versus-high-anomaly candidate ranking.
+- Added time-strict case splitting and case-weighted Top-k aggregation.
+
+### Removed
+
+- Removed the hard-symptom contrastive loss and its hyperparameter search.
+  Complete paired experiments did not demonstrate a stable overall benefit.
+
 ## v1.1.0-reacr-stable
 
 This release promotes the optimized FAMOS-Baro-CoE-DyCauRCA path as the

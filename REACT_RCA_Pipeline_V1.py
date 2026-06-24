@@ -25,9 +25,11 @@ from models.REACT_RCA_Trainer_V1 import (
     DyCauRCAModel,
     build_prediction_dataframe,
     predict_scores,
+    save_challenge2_diagnostics,
     train_dycau,
 )
 from models.REACT_RCA_EventChainExplainer_V1 import export_event_chains
+from models.REACR_RCA_ArtifactExporter_V1 import export_intermediate_artifacts
 from models.REACT_RCA_ModalityGate_V1 import (
     ModalityReliabilityGate,
     parse_modality_dims,
@@ -38,7 +40,7 @@ from utils.public_functions import load_init, load_samples
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='DyCauRCA stage-1 full RCA skeleton and formal minimal trainer')
+    parser = argparse.ArgumentParser(description='REACR-RCA stage-1 full RCA trainer')
     parser.add_argument('--dataset', default='D1')
     parser.add_argument('--window_size', type=int, default=10)
     parser.add_argument('--train_stride', type=int, default=1)
@@ -70,15 +72,22 @@ def parse_args():
     parser.add_argument('--causal_gamma', type=float, default=0.5)
     parser.add_argument('--causal_kernel_size', type=int, default=5)
     parser.add_argument('--rank_hidden_dim', type=int, default=64)
+    parser.add_argument('--ranker_mode', choices=['legacy', 'root_symptom', 'counterfactual'], default='legacy')
     parser.add_argument('--anchor_init_scale', type=float, default=1.0)
     parser.add_argument('--branch_init_scale', type=float, default=0.1)
     parser.add_argument('--train_epochs', type=int, default=0)
     parser.add_argument('--train_learning_rate', type=float, default=1e-3)
     parser.add_argument('--train_weight_decay', type=float, default=0.0)
     parser.add_argument('--train_patience', type=int, default=10)
+    parser.add_argument('--enable_explanation_losses', action='store_true')
+    parser.add_argument('--root_symptom_loss_weight', type=float, default=0.0)
+    parser.add_argument('--counterfactual_loss_weight', type=float, default=0.0)
+    parser.add_argument('--event_chain_loss_weight', type=float, default=0.0)
+    parser.add_argument('--invariance_loss_weight', type=float, default=0.0)
+    parser.add_argument('--hard_symptom_topk', type=int, default=5)
     parser.add_argument('--feedback_sample_ratio', type=float, default=-1.0)
     parser.add_argument('--test_start_ratio', type=float, default=0.5)
-    parser.add_argument('--case_split_protocol', choices=['legacy', 'fair'], default='legacy')
+    parser.add_argument('--case_split_protocol', choices=['legacy', 'fair', 'time_strict'], default='legacy')
     parser.add_argument('--export_event_chains', action='store_true')
     parser.add_argument('--event_chain_topk', type=int, default=3)
     parser.add_argument('--event_chain_max_depth', type=int, default=3)
@@ -86,7 +95,9 @@ def parse_args():
     parser.add_argument('--event_chain_evidence_topk', type=int, default=5)
     parser.add_argument('--event_chain_min_strength', type=float, default=0.0)
     parser.add_argument('--allow_event_chain_fallback', action='store_true')
-    parser.add_argument('--device', default='cpu')
+    parser.add_argument('--export_intermediate_artifacts', action='store_true')
+    parser.add_argument('--artifact_dir', default='')
+    parser.add_argument('--device', default='cuda')
     parser.add_argument('--seed', type=int, default=-1)
     parser.add_argument('--tag', default='')
     parser.add_argument('--output_dir', default='')
@@ -196,6 +207,7 @@ def build_model(args, feat_dim: int, node_num: int, config=None) -> DyCauRCAMode
         dropout=args.dropout,
         anchor_init_scale=args.anchor_init_scale,
         branch_init_scale=args.branch_init_scale,
+        ranker_mode=args.ranker_mode,
     )
     return DyCauRCAModel(backbone, anomaly_head, causal_head, ranker, modality_gate=modality_gate)
 
@@ -208,10 +220,16 @@ def split_cases_for_training(
     test_start_ratio: float = 0.5,
 ):
     ratio = feedback_sample_ratio if 0 < feedback_sample_ratio < 1 else default_ratio
+    cases = cases.reset_index(drop=True).copy()
+    if 'case_id' not in cases.columns:
+        cases.insert(0, 'case_id', np.arange(len(cases), dtype=int))
+    if protocol == 'time_strict':
+        cases = cases.sort_values(['timestamp', 'case_id']).reset_index(drop=True)
+
     case_count = len(cases)
     train_end = max(int(case_count * ratio), 1)
 
-    if protocol == 'fair':
+    if protocol in ('fair', 'time_strict'):
         test_start = max(int(case_count * test_start_ratio), train_end + 1)
         test_start = min(test_start, case_count - 1)
         train_end = min(train_end, test_start - 1)
@@ -264,7 +282,7 @@ def main():
     config = yaml.load(open(f'config/{args.dataset}.yaml', 'r'), Loader=yaml.FullLoader)
 
     suffix = f'_{args.tag}' if args.tag else ''
-    res_dir = args.output_dir if args.output_dir else f"res/{args.dataset}_dycaurca_stage1{suffix}"
+    res_dir = args.output_dir if args.output_dir else f"res/{args.dataset}_reacr_rca_stage1{suffix}"
     os.makedirs(res_dir, exist_ok=True)
 
     summary_path = os.path.join(res_dir, 'stage1_dsbg_summary.json')
@@ -275,6 +293,12 @@ def main():
     validation_prediction_path = os.path.join(res_dir, 'validation_predictions.csv')
     event_chain_path = os.path.join(res_dir, 'event_chains.csv')
     event_chain_metrics_path = os.path.join(res_dir, 'event_chain_metrics.json')
+    chain_validation_path = os.path.join(res_dir, 'chain_validation.csv')
+    chain_validation_metrics_path = os.path.join(res_dir, 'chain_validation_metrics.json')
+    challenge2_role_path = os.path.join(res_dir, 'challenge2_role_diagnostic.csv')
+    challenge2_role_metrics_path = os.path.join(res_dir, 'challenge2_role_summary.json')
+    challenge2_role_markdown_path = os.path.join(res_dir, 'challenge2_role_summary.md')
+    call_chain_catalog_path = config.get('path', {}).get('call_chain_catalog', '')
     checkpoint_path = os.path.join(res_dir, 'best_model.pt')
     config_path = os.path.join(res_dir, 'run_config.json')
 
@@ -354,6 +378,11 @@ def main():
                 learning_rate=args.train_learning_rate,
                 weight_decay=args.train_weight_decay,
                 patience=args.train_patience,
+                enable_explanation_losses=args.enable_explanation_losses,
+                root_symptom_loss_weight=args.root_symptom_loss_weight,
+                counterfactual_loss_weight=args.counterfactual_loss_weight,
+                event_chain_loss_weight=args.event_chain_loss_weight,
+                invariance_loss_weight=args.invariance_loss_weight,
             )
 
             torch.save(model.state_dict(), checkpoint_path)
@@ -368,6 +397,16 @@ def main():
             pred_scores, pred_labels, pred_case_ids, pred_case_timestamps = predict_scores(model, test_case_loader, device=torch.device(train_meta['device']))
             pred_df = build_prediction_dataframe(pred_scores, pred_labels, pred_case_ids, pred_case_timestamps, index_to_node)
             pred_df.to_csv(prediction_path, index=False)
+            challenge2_metrics = save_challenge2_diagnostics(
+                model,
+                test_case_loader,
+                device=torch.device(train_meta['device']),
+                index_to_node=index_to_node,
+                csv_path=challenge2_role_path,
+                metrics_path=challenge2_role_metrics_path,
+                markdown_path=challenge2_role_markdown_path,
+                hard_symptom_topk=args.hard_symptom_topk,
+            )
             event_chain_metrics = None
             if args.export_event_chains:
                 event_chain_metrics = export_event_chains(
@@ -377,12 +416,26 @@ def main():
                     index_to_node=index_to_node,
                     csv_path=event_chain_path,
                     metrics_path=event_chain_metrics_path,
+                    validation_csv_path=chain_validation_path,
+                    validation_metrics_path=chain_validation_metrics_path,
+                    call_chain_catalog_path=call_chain_catalog_path,
                     topk=args.event_chain_topk,
                     max_depth=args.event_chain_max_depth,
                     edge_topk=args.event_chain_edge_topk,
                     evidence_topk=args.event_chain_evidence_topk,
                     min_strength=args.event_chain_min_strength,
                     allow_fallback=args.allow_event_chain_fallback,
+                )
+
+            artifact_summary = None
+            if args.export_intermediate_artifacts:
+                artifact_dir = args.artifact_dir or os.path.join(res_dir, 'intermediate_artifacts')
+                artifact_summary = export_intermediate_artifacts(
+                    model,
+                    test_case_loader,
+                    device=torch.device(train_meta['device']),
+                    index_to_node=index_to_node,
+                    output_dir=artifact_dir,
                 )
 
             training_summary = {
@@ -402,7 +455,15 @@ def main():
                 'prediction_path': prediction_path,
                 'event_chain_path': event_chain_path if args.export_event_chains else None,
                 'event_chain_metrics_path': event_chain_metrics_path if args.export_event_chains else None,
+                'chain_validation_path': chain_validation_path if args.export_event_chains else None,
+                'chain_validation_metrics_path': chain_validation_metrics_path if args.export_event_chains else None,
+                'call_chain_catalog_path': call_chain_catalog_path if args.export_event_chains else None,
+                'challenge2_role_path': challenge2_role_path,
+                'challenge2_role_metrics_path': challenge2_role_metrics_path,
+                'challenge2_role_markdown_path': challenge2_role_markdown_path,
+                'challenge2_role_metrics': challenge2_metrics,
                 'event_chain_metrics': event_chain_metrics,
+                'intermediate_artifacts': artifact_summary,
                 'validation_eval': validation_eval,
                 'final_eval': final_eval,
                 'train_meta': train_meta,
@@ -456,8 +517,17 @@ def main():
         },
         'rank_config': {
             'rank_hidden_dim': args.rank_hidden_dim,
+            'ranker_mode': args.ranker_mode,
             'anchor_init_scale': args.anchor_init_scale,
             'branch_init_scale': args.branch_init_scale,
+        },
+        'explanation_loss_config': {
+            'enabled': args.enable_explanation_losses,
+            'root_symptom_loss_weight': args.root_symptom_loss_weight,
+            'counterfactual_loss_weight': args.counterfactual_loss_weight,
+            'event_chain_loss_weight': args.event_chain_loss_weight,
+            'invariance_loss_weight': args.invariance_loss_weight,
+            'hard_symptom_topk': args.hard_symptom_topk,
         },
         'source_config': {
             'sample_dir': config['path']['sample_dir'],
@@ -477,7 +547,7 @@ def main():
 
     save_json(summary_path, summary)
 
-    print('DyCauRCA stage-1 full RCA skeleton is ready.')
+    print('REACR-RCA stage-1 full RCA trainer is ready.')
     print(json.dumps(summary, indent=2))
     print(f'summary saved to {summary_path}')
 
