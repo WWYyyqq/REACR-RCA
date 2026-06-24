@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.1.0-reacr-rca
+
+### Changed
+
+- Renamed V2 entrypoints and core modules to the stable `reacr_rca_*` naming
+  convention without changing model behaviour.
+- Updated imports, final-study subprocess entrypoints, and Chinese README
+  examples to use the new names.
+
 ## v2.0.0-reacr-rca
 
 ### Changed

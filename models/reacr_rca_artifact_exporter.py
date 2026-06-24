@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from models.REACT_RCA_Trainer_V1 import _move_graphs_to_device, _safe_device
+from models.reacr_rca_trainer import _move_graphs_to_device, _safe_device
 
 
 def _numpy(value):

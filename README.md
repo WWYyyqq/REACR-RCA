@@ -40,7 +40,7 @@ flowchart LR
 
 | 文件 | 作用 |
 | --- | --- |
-| `REACT_RCA_Pipeline_V1.py` | 单次训练入口。加载配置和数据，划分 case，训练模型，选择验证集最优 checkpoint，导出评估、预测、角色诊断和可选事件链。 |
+| `reacr_rca_pipeline.py` | 单次训练入口。加载配置和数据，划分 case，训练模型，选择验证集最优 checkpoint，导出评估、预测、角色诊断和可选事件链。 |
 | `config/D1.yaml`、`config/D2.yaml` | 定义数据目录、节点特征维度和数据集默认参数。 |
 | `utils/public_functions.py` | 读取 `samples/*.pkl`、`graphs_info/*.pkl` 和节点编号映射。 |
 
@@ -48,15 +48,15 @@ flowchart LR
 
 | 文件 | 作用 |
 | --- | --- |
-| `models/REACT_RCA_DSBGDataset_V1.py` | 将连续 DGL 样本构造成 `[B, W, N, F]` 动态窗口；将故障 case 对齐到时间窗口并生成根因标签。 |
-| `models/REACT_RCA_DynamicBackbone_V1.py` | 对每个窗口进行图空间编码、GRU 时序编码和时间注意力聚合。 |
-| `models/REACT_RCA_ModalityGate_V1.py` | 可选的多模态可靠性门控，融合 metric、trace、log 特征。 |
-| `models/REACT_RCA_AnomalyHead_V1.py` | 从重构误差、预测误差、时序变化等生成节点异常演化分数。 |
-| `models/REACT_RCA_CausalHead_V1.py` | 从异常序列学习带 lag 的 `causal_matrix[target, source]`。 |
-| `models/REACT_RCA_CausalRanker_V1.py` | V2 核心。提供 `legacy`、`root_symptom`、`counterfactual` 三种排序模式，输出根因/症状角色和反事实证据。 |
-| `models/REACT_RCA_Trainer_V1.py` | 训练、验证和测试；包含排序损失、根因-症状约束、反事实损失、事件链一致性和跨 case 不变性正则。 |
-| `models/REACT_RCA_EventChainExplainer_V1.py` | 将模型的因果和排序证据导出为事件链；该链是可解释排序证据，不等同于真实异常传播链。 |
-| `models/REACR_RCA_ArtifactExporter_V1.py` | 可选地按 batch 导出输入、时序状态、异常分数、因果矩阵与角色证据，便于外部检查。 |
+| `models/reacr_rca_dsbg_dataset.py` | 将连续 DGL 样本构造成 `[B, W, N, F]` 动态窗口；将故障 case 对齐到时间窗口并生成根因标签。 |
+| `models/reacr_rca_dynamic_backbone.py` | 对每个窗口进行图空间编码、GRU 时序编码和时间注意力聚合。 |
+| `models/reacr_rca_modality_gate.py` | 可选的多模态可靠性门控，融合 metric、trace、log 特征。 |
+| `models/reacr_rca_anomaly_head.py` | 从重构误差、预测误差、时序变化等生成节点异常演化分数。 |
+| `models/reacr_rca_causal_head.py` | 从异常序列学习带 lag 的 `causal_matrix[target, source]`。 |
+| `models/reacr_rca_causal_ranker.py` | V2 核心。提供 `legacy`、`root_symptom`、`counterfactual` 三种排序模式，输出根因/症状角色和反事实证据。 |
+| `models/reacr_rca_trainer.py` | 训练、验证和测试；包含排序损失、根因-症状约束、反事实损失、事件链一致性和跨 case 不变性正则。 |
+| `models/reacr_rca_event_chain_explainer.py` | 将模型的因果和排序证据导出为事件链；该链是可解释排序证据，不等同于真实异常传播链。 |
+| `models/reacr_rca_artifact_exporter.py` | 可选地按 batch 导出输入、时序状态、异常分数、因果矩阵与角色证据，便于外部检查。 |
 
 `models/dycau_trainer.py`、`evaluation.py`、`layers.py`、`noise_engineering.py`、`rc_scorer.py`、`train.py` 是保留的 DeepHunt 兼容模块，供事件链导出或 baseline runner 使用，不是 V2 排序器主体。
 
@@ -64,7 +64,7 @@ flowchart LR
 
 | 文件 | 作用 |
 | --- | --- |
-| `tools/REACR_RCA_FinalStudyRunner.py` | 统一运行多 seed 主方法、`legacy/root_symptom/counterfactual` 消融和可复现结果汇总。 |
+| `tools/reacr_rca_final_study_runner.py` | 统一运行多 seed 主方法、`legacy/root_symptom/counterfactual` 消融和可复现结果汇总。 |
 | `REACR_RCA_CODE_MANIFEST_V2.md` | 当前 V2 主代码边界。 |
 | `REACR_RCA_V2_RELEASE_NOTES.md` | V2 发布内容和能力边界。 |
 
@@ -91,7 +91,7 @@ data/D2/
 推荐使用时间严格划分和 case-weighted A@K：
 
 ```bash
-python REACT_RCA_Pipeline_V1.py \
+python reacr_rca_pipeline.py \
   --dataset D1 --device cuda --seed 0 \
   --case_split_protocol time_strict \
   --ranker_mode counterfactual \

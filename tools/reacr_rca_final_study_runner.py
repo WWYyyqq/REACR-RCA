@@ -189,7 +189,7 @@ def build_pipeline_cmd(dataset, variant_name, variant, seed, epochs, out_dir, ar
     cmd = [
         sys.executable,
         "-u",
-        str(ROOT / "REACT_RCA_Pipeline_V1.py"),
+        str(ROOT / "reacr_rca_pipeline.py"),
         "--dataset",
         pipeline_dataset(dataset),
         "--device",
