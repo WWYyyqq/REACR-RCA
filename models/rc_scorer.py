@@ -10,6 +10,7 @@ import torch.nn as nn
 from tqdm import tqdm
 from torch.utils.data import Dataset, DataLoader
 from models.layers import create_dataloader_fd, RankingLoss
+from models.reacr_rca_dsbg_dataset import resolve_root_cause_node_indices
 import dgl.function as fn
 
 def naive_scorer(cases, samples, loss_df, node_hash, window_size=10, pre=0.0, suc=-0.0):
@@ -98,9 +99,13 @@ def get_feedback_samples(cases, samples, node_hash, window_size=10, batch_size=1
         start_ts = case['timestamp'] - (window_size*60)/2
         end_ts = case['timestamp'] + (window_size*60)/2
         label = torch.zeros(samples[0][1].num_nodes())
-        for node in node_hash:
-            if node.startswith(case['cmdb_id']):
-                label[node_hash[node]] = 1.0
+        matched_indices = resolve_root_cause_node_indices(case['cmdb_id'], node_hash)
+        if not matched_indices:
+            raise ValueError(
+                f"No graph node matches root-cause label {case['cmdb_id']!r}"
+            )
+        for node_idx in matched_indices:
+            label[node_idx] = 1.0
         labels.append(label)
         series = []
         for sample in samples:

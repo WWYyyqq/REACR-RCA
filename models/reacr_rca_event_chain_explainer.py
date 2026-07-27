@@ -6,7 +6,12 @@ import numpy as np
 import pandas as pd
 import torch
 
-from models.dycau_trainer import _move_graphs_to_device, _safe_device
+from models.reacr_rca_trainer import (
+    _move_graphs_to_device,
+    _safe_device,
+    candidate_bag_relation_signature,
+    prepare_graph_sequence,
+)
 
 
 def _safe_node_name(index_to_node: Dict[int, str], node_idx: int) -> str:
@@ -20,6 +25,20 @@ def _static_edges(graph: dgl.DGLGraph) -> Tuple[set, set]:
     return forward, reverse
 
 
+def _window_edge_union(
+    unbatched_graph_steps: Sequence[Sequence[dgl.DGLGraph]],
+    sample_idx: int,
+) -> Tuple[set, set]:
+    """Return the observed edge union for one sample across its exact window."""
+
+    forward = set()
+    for step_graphs in unbatched_graph_steps:
+        step_forward, _ = _static_edges(step_graphs[sample_idx])
+        forward.update(step_forward)
+    reverse = {(target, source) for source, target in forward}
+    return forward, reverse
+
+
 def _edge_direction(source: int, target: int, forward_edges: set, reverse_edges: set) -> str:
     if source == target:
         return 'self'
@@ -27,7 +46,7 @@ def _edge_direction(source: int, target: int, forward_edges: set, reverse_edges:
         return 'downstream'
     if (source, target) in reverse_edges:
         return 'upstream'
-    return 'causal_inferred'
+    return 'model_relation_only'
 
 
 def _build_outgoing_edges(causal_matrix: torch.Tensor, edge_topk: int, min_strength: float) -> Dict[int, List[Tuple[int, float]]]:
@@ -37,10 +56,12 @@ def _build_outgoing_edges(causal_matrix: torch.Tensor, edge_topk: int, min_stren
     for source_idx in range(node_num):
         # causal_matrix[target, source] follows the causal head convention.
         strengths = causal_matrix[:, source_idx].clone()
-        strengths[source_idx] = 0.0
+        strengths[source_idx] = float('-inf')
         values, targets = torch.topk(strengths, k=edge_topk)
         for target_idx, strength in zip(targets.tolist(), values.tolist()):
-            if strength >= min_strength and target_idx != source_idx:
+            # A zero entry means that the relation was masked, thresholded, or
+            # assigned no probability. It must never create a strict path.
+            if np.isfinite(strength) and strength > max(float(min_strength), 0.0):
                 outgoing[source_idx].append((target_idx, float(strength)))
     return outgoing
 
@@ -259,7 +280,7 @@ def _format_edges(
             (
                 f"{_safe_node_name(index_to_node, source_idx)}"
                 f"->{_safe_node_name(index_to_node, target_idx)}"
-                f"[{direction},causal={strength:.6f}]"
+                f"[{direction},relation={strength:.6f}]"
             )
         )
     return ' | '.join(formatted)
@@ -285,6 +306,8 @@ def _path_validation_features(
     causal_lag_limit: int,
     forward_edges: set,
     reverse_edges: set,
+    predicted_lags: Optional[Sequence[int]] = None,
+    lag_tolerance: int = 1,
 ) -> Dict[str, float]:
     nodes = _path_nodes(root_idx, path)
     evidence_set = set(int(node_idx) for node_idx in evidence_nodes)
@@ -295,41 +318,100 @@ def _path_validation_features(
         return {
             'topology_edge_hit_rate': 0.0,
             'direction_consistency_rate': 0.0,
+            'model_relation_only_ratio': 0.0,
+            # Deprecated output alias retained for readers of older CSV files.
             'causal_inferred_ratio': 0.0,
             'temporal_order_rate': 0.0,
             'lag_consistency_rate': 0.0,
             'mean_observed_lag_steps': 0.0,
+            'mean_predicted_lag_steps': 0.0,
+            'mean_absolute_lag_error': 0.0,
             'observed_anomaly_coverage': observed_anomaly_coverage,
         }
 
     directions = [_edge_direction(source_idx, target_idx, forward_edges, reverse_edges) for source_idx, target_idx, _ in path]
-    topology_hits = [direction != 'causal_inferred' for direction in directions]
+    topology_hits = [direction != 'model_relation_only' for direction in directions]
     direction_hits = [direction in {'self', 'downstream'} for direction in directions]
-    inferred_hits = [direction == 'causal_inferred' for direction in directions]
+    relation_only_hits = [direction == 'model_relation_only' for direction in directions]
 
     onset = _node_onset_steps(anomaly_score)
     lags = [int(onset[target_idx].item() - onset[source_idx].item()) for source_idx, target_idx, _ in path]
     temporal_hits = [lag >= 0 for lag in lags]
-    lag_hits = [0 <= lag <= max(causal_lag_limit, 0) for lag in lags]
+    if predicted_lags is not None and len(predicted_lags) == len(lags):
+        lag_errors = [
+            abs(observed_lag - int(predicted_lag))
+            for observed_lag, predicted_lag in zip(lags, predicted_lags)
+        ]
+        lag_hits = [
+            observed_lag >= 0 and error <= max(int(lag_tolerance), 0)
+            for observed_lag, error in zip(lags, lag_errors)
+        ]
+        mean_predicted_lag = float(np.mean(predicted_lags))
+        mean_absolute_lag_error = float(np.mean(lag_errors))
+    else:
+        lag_hits = [0 <= lag <= max(causal_lag_limit, 0) for lag in lags]
+        mean_predicted_lag = 0.0
+        mean_absolute_lag_error = 0.0
 
     return {
         'topology_edge_hit_rate': float(np.mean(topology_hits)),
         'direction_consistency_rate': float(np.mean(direction_hits)),
-        'causal_inferred_ratio': float(np.mean(inferred_hits)),
+        'model_relation_only_ratio': float(np.mean(relation_only_hits)),
+        # Deprecated alias: this is relation evidence, not identified causality.
+        'causal_inferred_ratio': float(np.mean(relation_only_hits)),
         'temporal_order_rate': float(np.mean(temporal_hits)),
         'lag_consistency_rate': float(np.mean(lag_hits)),
         'mean_observed_lag_steps': float(np.mean(lags)),
+        'mean_predicted_lag_steps': mean_predicted_lag,
+        'mean_absolute_lag_error': mean_absolute_lag_error,
         'observed_anomaly_coverage': observed_anomaly_coverage,
+    }
+
+
+def _path_lag_predictions(
+    path: Sequence[Tuple[int, int, float]],
+    lag_weights: Optional[torch.Tensor],
+) -> Dict[str, List[float]]:
+    """Extract pair-specific lag summaries for every source->target path edge."""
+
+    if lag_weights is None or not path:
+        return {'argmax_lags': [], 'expected_lags': [], 'confidences': []}
+    if lag_weights.ndim not in {1, 3}:
+        raise ValueError(
+            'per-sample lag_weights must be [L] or [L, target, source], '
+            f'got {tuple(lag_weights.shape)}'
+        )
+
+    argmax_lags = []
+    expected_lags = []
+    confidences = []
+    for source_idx, target_idx, _ in path:
+        weights = (
+            lag_weights
+            if lag_weights.ndim == 1
+            else lag_weights[:, target_idx, source_idx]
+        ).detach().float().cpu().clamp_min(0.0)
+        if weights.numel() == 0:
+            continue
+        if float(weights.sum().item()) <= 0.0:
+            weights = torch.full_like(weights, 1.0 / weights.numel())
+        else:
+            weights = weights / weights.sum()
+        lag_values = torch.arange(1, weights.numel() + 1, dtype=weights.dtype)
+        argmax_lags.append(int(torch.argmax(weights).item()) + 1)
+        expected_lags.append(float(torch.sum(weights * lag_values).item()))
+        confidences.append(float(torch.max(weights).item()))
+    return {
+        'argmax_lags': argmax_lags,
+        'expected_lags': expected_lags,
+        'confidences': confidences,
     }
 
 
 def _batch_signature_consistency(causal_matrices: torch.Tensor, labels: Optional[torch.Tensor], group_ids: Optional[torch.Tensor]) -> List[float]:
     if labels is None or group_ids is None or causal_matrices.shape[0] < 2:
         return [float('nan')] * causal_matrices.shape[0]
-    label_weight = labels / labels.sum(dim=1, keepdim=True).clamp_min(1.0)
-    root_to_targets = torch.bmm(causal_matrices, label_weight.unsqueeze(-1)).squeeze(-1)
-    root_outgoing = torch.bmm(causal_matrices.transpose(1, 2), label_weight.unsqueeze(-1)).squeeze(-1)
-    signature = torch.cat([root_to_targets, root_outgoing], dim=-1)
+    signature = candidate_bag_relation_signature(causal_matrices, labels)
     signature = torch.nn.functional.normalize(signature, dim=-1)
     sim = torch.matmul(signature, signature.t())
     values = []
@@ -356,6 +438,16 @@ def _aggregate_metrics(rows: List[Dict[str, object]], topk: int) -> Dict[str, fl
     strict_rows = df[df['path_found'] > 0]
     fallback_rows = df[df['fallback_used'] > 0]
     strict_label_rows = label_rows[label_rows['path_found'] > 0]
+    candidate_chain_hit = (
+        float(label_rows.groupby('case_id')['label_candidate_in_chain_strict'].max().mean())
+        if len(label_rows)
+        else 0.0
+    )
+    candidate_hit = (
+        float(label_rows.groupby('case_id')['candidate_is_label_match'].max().mean())
+        if len(label_rows)
+        else 0.0
+    )
     return {
         'cases': case_count,
         'explanations': int(len(df)),
@@ -364,8 +456,11 @@ def _aggregate_metrics(rows: List[Dict[str, object]], topk: int) -> Dict[str, fl
         'strict_chain_coverage_at_topk': float((label_rows['path_found'] > 0).mean()) if len(label_rows) else 0.0,
         'fallback_chain_coverage': float((df['fallback_used'] > 0).mean()),
         'fallback_chain_coverage_at_topk': float((label_rows['fallback_used'] > 0).mean()) if len(label_rows) else 0.0,
-        'label_chain_hit_at_topk_strict': float(label_rows.groupby('case_id')['label_in_chain_strict'].max().mean()) if len(label_rows) else 0.0,
-        'label_root_hit_at_topk': float(label_rows.groupby('case_id')['label_is_root'].max().mean()) if len(label_rows) else 0.0,
+        'label_candidate_chain_hit_at_topk_strict': candidate_chain_hit,
+        'label_candidate_hit_at_topk': candidate_hit,
+        # Deprecated aliases retained for historical result readers.
+        'label_chain_hit_at_topk_strict': candidate_chain_hit,
+        'label_root_hit_at_topk': candidate_hit,
         'strict_explanations': int(len(strict_rows)),
         'fallback_explanations': int(len(fallback_rows)),
         'avg_path_length': float(strict_rows['path_length'].mean()) if len(strict_rows) else 0.0,
@@ -380,14 +475,24 @@ def _aggregate_validation_metrics(rows: List[Dict[str, object]], topk: int) -> D
     df = pd.DataFrame(rows)
     label_rows = df[df['rank'] <= topk]
     numeric_cols = [
+        'candidate_hit',
+        'label_candidate_in_chain',
+        # Deprecated aliases follow.
         'root_hit',
         'label_in_chain',
         'topology_edge_hit_rate',
         'direction_consistency_rate',
+        'model_relation_only_ratio',
         'causal_inferred_ratio',
         'temporal_order_rate',
         'lag_consistency_rate',
+        'mean_predicted_lag_steps',
+        'mean_absolute_lag_error',
         'observed_anomaly_coverage',
+        'source_role_score',
+        'response_role_score',
+        'source_hypothesis_coverage',
+        'source_hypothesis_residual',
         'counterfactual_coverage',
         'counterfactual_residual',
         'same_group_signature_consistency',
@@ -403,9 +508,12 @@ def _aggregate_validation_metrics(rows: List[Dict[str, object]], topk: int) -> D
         'cases': int(df['case_id'].nunique()),
         'validated_explanations': int(len(df)),
         'topk_per_case': int(topk),
-        'root_hit_at_topk': float(label_rows.groupby('case_id')['root_hit'].max().mean()) if len(label_rows) else 0.0,
-        'label_in_chain_at_topk': float(label_rows.groupby('case_id')['label_in_chain'].max().mean()) if len(label_rows) else 0.0,
+        'candidate_hit_at_topk': float(label_rows.groupby('case_id')['candidate_hit'].max().mean()) if len(label_rows) else 0.0,
+        'label_candidate_in_chain_at_topk': float(label_rows.groupby('case_id')['label_candidate_in_chain'].max().mean()) if len(label_rows) else 0.0,
     }
+    # Deprecated aliases retained for historical result readers.
+    metrics['root_hit_at_topk'] = metrics['candidate_hit_at_topk']
+    metrics['label_in_chain_at_topk'] = metrics['label_candidate_in_chain_at_topk']
     for col in numeric_cols:
         if col in df.columns:
             mean_value = pd.to_numeric(df[col], errors='coerce').mean()
@@ -452,8 +560,20 @@ def export_event_chains(
             rank_output = {key: value.detach().cpu() for key, value in outputs['rank_output'].items()}
             anomaly_scores = outputs['anomaly_output']['anomaly_score'].detach().cpu()
             causal_matrices = outputs['causal_output']['causal_matrix'].detach().cpu()
-            causal_lag_limit = int(outputs['causal_output'].get('lag_weights', torch.empty(0)).numel())
-            graph_list = dgl.unbatch(batch['graphs'][-1])
+            lag_weights = outputs['causal_output'].get('lag_weights')
+            if lag_weights is not None:
+                lag_weights = lag_weights.detach().cpu()
+            if lag_weights is None:
+                causal_lag_limit = 0
+            elif lag_weights.ndim == 1:
+                causal_lag_limit = int(lag_weights.numel())
+            else:
+                causal_lag_limit = int(lag_weights.shape[1])
+            validation_graphs = prepare_graph_sequence(
+                batch['graphs'],
+                getattr(model, 'graph_sequence_mode', 'observed'),
+            )
+            unbatched_graph_steps = [dgl.unbatch(graph) for graph in validation_graphs]
             group_ids = batch.get('group_ids')
             group_ids = group_ids.cpu() if group_ids is not None else None
             signature_consistency = _batch_signature_consistency(causal_matrices, labels, group_ids)
@@ -468,7 +588,13 @@ def export_event_chains(
                 top_roots = torch.argsort(final_score, descending=True)[:topk].tolist()
                 evidence_nodes = torch.argsort(anomaly_peak, descending=True)[:evidence_topk].tolist()
                 outgoing = _build_outgoing_edges(causal_matrix, edge_topk=edge_topk, min_strength=min_strength)
-                forward_edges, reverse_edges = _static_edges(graph_list[sample_idx])
+                # The relation head is constrained by the union of all observed
+                # graph snapshots in the window, so validation must use the same
+                # support rather than only the final snapshot.
+                forward_edges, reverse_edges = _window_edge_union(
+                    unbatched_graph_steps,
+                    sample_idx,
+                )
                 label_nodes = []
                 if labels is not None:
                     label_nodes = torch.where(labels[sample_idx] > 0)[0].tolist()
@@ -484,11 +610,19 @@ def export_event_chains(
                     )
                     nodes = _path_nodes(root_idx, path)
                     strengths = [edge[2] for edge in path]
+                    sample_lag_weights = None
+                    if lag_weights is not None:
+                        sample_lag_weights = (
+                            lag_weights
+                            if lag_weights.ndim == 1
+                            else lag_weights[sample_idx]
+                        )
+                    lag_prediction = _path_lag_predictions(path, sample_lag_weights)
                     path_found = int(path_type == 'strict')
                     directional_count = sum(
                         1
                         for source_idx, target_idx, _ in path
-                        if _edge_direction(source_idx, target_idx, forward_edges, reverse_edges) != 'causal_inferred'
+                        if _edge_direction(source_idx, target_idx, forward_edges, reverse_edges) != 'model_relation_only'
                     )
                     path_strength = float(np.prod(strengths)) if strengths else 0.0
                     label_in_chain_strict = int(path_found and any(node_idx in label_set for node_idx in nodes))
@@ -500,6 +634,7 @@ def export_event_chains(
                         causal_lag_limit=causal_lag_limit,
                         forward_edges=forward_edges,
                         reverse_edges=reverse_edges,
+                        predicted_lags=lag_prediction['argmax_lags'],
                     )
                     chain_node_names = [_safe_node_name(index_to_node, node_idx) for node_idx in nodes]
                     case_id = int(batch['case_ids'][sample_idx].item())
@@ -512,9 +647,18 @@ def export_event_chains(
                             'case_id': case_id,
                             'case_timestamp': int(batch['case_timestamps'][sample_idx].item()),
                             'rank': int(rank_idx),
+                            'candidate_node': _safe_node_name(index_to_node, root_idx),
+                            'candidate_index': int(root_idx),
+                            'candidate_score': float(final_score[root_idx].item()),
+                            # Deprecated aliases retained for historical readers.
                             'root_node': _safe_node_name(index_to_node, root_idx),
                             'root_index': int(root_idx),
                             'root_score': float(final_score[root_idx].item()),
+                            'source_role_score': float(rank_output['source_role_score'][sample_idx, root_idx].item()),
+                            'response_role_score': float(rank_output['response_role_score'][sample_idx, root_idx].item()),
+                            'source_hypothesis_coverage': float(rank_output['source_hypothesis_coverage'][sample_idx, root_idx].item()),
+                            'source_hypothesis_residual': float(rank_output['source_hypothesis_residual'][sample_idx, root_idx].item()),
+                            # Deprecated aliases retained for older analysis scripts.
                             'root_role_score': float(rank_output['root_role_score'][sample_idx, root_idx].item()),
                             'symptom_role_score': float(rank_output['symptom_role_score'][sample_idx, root_idx].item()),
                             'source_score': float(rank_output['source_score'][sample_idx, root_idx].item()),
@@ -522,6 +666,11 @@ def export_event_chains(
                             'incoming_explainedness': float(rank_output['incoming_explainedness'][sample_idx, root_idx].item()),
                             'counterfactual_coverage': float(rank_output['counterfactual_coverage'][sample_idx, root_idx].item()),
                             'counterfactual_residual': float(rank_output['counterfactual_residual'][sample_idx, root_idx].item()),
+                            'label_candidate_nodes': ','.join(_safe_node_name(index_to_node, idx) for idx in label_nodes),
+                            'candidate_is_label_match': int(root_idx in label_set),
+                            'label_candidate_in_chain': label_in_chain_strict,
+                            'label_candidate_in_chain_strict': label_in_chain_strict,
+                            # Deprecated aliases retained for historical readers.
                             'label_nodes': ','.join(_safe_node_name(index_to_node, idx) for idx in label_nodes),
                             'label_is_root': int(root_idx in label_set),
                             'label_in_chain': label_in_chain_strict,
@@ -531,6 +680,15 @@ def export_event_chains(
                             'fallback_used': int(fallback_used),
                             'path_length': int(len(path)),
                             'path_strength': path_strength,
+                            'predicted_lag_steps': '|'.join(
+                                str(value) for value in lag_prediction['argmax_lags']
+                            ),
+                            'expected_lag_steps': '|'.join(
+                                f'{value:.6f}' for value in lag_prediction['expected_lags']
+                            ),
+                            'lag_confidences': '|'.join(
+                                f'{value:.6f}' for value in lag_prediction['confidences']
+                            ),
                             'directional_edge_ratio': float(directional_count / max(len(path), 1)),
                             'chain': _format_chain(nodes, index_to_node),
                             'event_evidence': _format_events(nodes, final_score, anomaly_mean, anomaly_peak, index_to_node),
@@ -542,6 +700,12 @@ def export_event_chains(
                             'case_id': case_id,
                             'case_timestamp': int(batch['case_timestamps'][sample_idx].item()),
                             'rank': int(rank_idx),
+                            'pred_candidate': _safe_node_name(index_to_node, root_idx),
+                            'pred_candidate_index': int(root_idx),
+                            'label_candidates': ','.join(_safe_node_name(index_to_node, idx) for idx in label_nodes),
+                            'candidate_hit': int(root_idx in label_set),
+                            'label_candidate_in_chain': label_in_chain_strict,
+                            # Deprecated aliases retained for historical readers.
                             'pred_root': _safe_node_name(index_to_node, root_idx),
                             'pred_root_index': int(root_idx),
                             'true_roots': ','.join(_safe_node_name(index_to_node, idx) for idx in label_nodes),
@@ -553,11 +717,19 @@ def export_event_chains(
                             'path_strength': path_strength,
                             'topology_edge_hit_rate': validation_features['topology_edge_hit_rate'],
                             'direction_consistency_rate': validation_features['direction_consistency_rate'],
+                            'model_relation_only_ratio': validation_features['model_relation_only_ratio'],
                             'causal_inferred_ratio': validation_features['causal_inferred_ratio'],
                             'temporal_order_rate': validation_features['temporal_order_rate'],
                             'lag_consistency_rate': validation_features['lag_consistency_rate'],
                             'mean_observed_lag_steps': validation_features['mean_observed_lag_steps'],
+                            'mean_predicted_lag_steps': validation_features['mean_predicted_lag_steps'],
+                            'mean_absolute_lag_error': validation_features['mean_absolute_lag_error'],
                             'observed_anomaly_coverage': validation_features['observed_anomaly_coverage'],
+                            'source_role_score': float(rank_output['source_role_score'][sample_idx, root_idx].item()),
+                            'response_role_score': float(rank_output['response_role_score'][sample_idx, root_idx].item()),
+                            'source_hypothesis_coverage': float(rank_output['source_hypothesis_coverage'][sample_idx, root_idx].item()),
+                            'source_hypothesis_residual': float(rank_output['source_hypothesis_residual'][sample_idx, root_idx].item()),
+                            # Deprecated aliases retained for older analysis scripts.
                             'root_role_score': float(rank_output['root_role_score'][sample_idx, root_idx].item()),
                             'symptom_role_score': float(rank_output['symptom_role_score'][sample_idx, root_idx].item()),
                             'incoming_explainedness': float(rank_output['incoming_explainedness'][sample_idx, root_idx].item()),
@@ -572,7 +744,7 @@ def export_event_chains(
                             'temporal_span_order_valid': call_chain_features['temporal_span_order_valid'],
                             'mean_span_lag_ms': call_chain_features['mean_span_lag_ms'],
                             'validation_note': (
-                                'root/topology labels come from dataset metadata; '
+                                'candidate/topology labels come from dataset metadata; '
                                 'temporal/anomaly coverage uses observed window anomaly scores; '
                                 'call-chain fields come from observed traceId/id/pid span trees when available; '
                                 'chain and counterfactual fields are model outputs.'

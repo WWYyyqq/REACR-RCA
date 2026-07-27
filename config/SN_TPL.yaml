@@ -1,0 +1,84 @@
+dataset: Eadro_SN_dynamic_with_drain_templates
+
+path:
+    case_dir: data/SN/cases.csv
+    graph_dir: data/SN/graphs_info/
+    sample_dir: data/SN_templates/samples/
+
+feat_dim:
+    metric: 29
+    trace: 10
+    log: 13
+
+modality_spans:
+    metric:
+        - [0, 28]
+    trace:
+        - [29, 38]
+    log:
+        - [39, 51]
+
+data_settings:
+    window_size: 12
+    train_stride: 1
+    sample_interval_seconds: 10
+    max_gap_seconds: 15
+    train_incomplete_policy: drop
+    case_incomplete_policy: error
+    case_pre_seconds: 0
+    case_post_seconds: 120
+    case_split_protocol: group
+    case_group_column: session_id
+
+train_samples_num: whole
+
+model_param:
+    num_layers: 2
+    in_dim: 52
+    hidden_dim: 64
+    out_dim: 32
+    edge_feature_dim: 5
+    topology_weight_gamma: 0.25
+    observation_prior:
+        enabled: true
+        base_score_key: outgoing_score
+        metric_feature_indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]
+        all_feature_indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 29, 30, 31, 32, 33, 34, 35, 36, 37, 39, 40, 41, 42, 43, 45, 46, 47, 48, 49, 50, 51]
+        weights:
+            base: 0.5
+            metric_peak: 0.5
+            temporal_range: 0.0
+            reconstruction_peak: 0.0
+    noise_rate: 0.3
+    epochs: 1000
+    batch_size: 64
+    learning_rate: 0.001
+    norm: none
+    aug_multiple: 1
+    feat_span:
+        - [0, 28]
+        - [29, 38]
+        - [39, 51]
+
+feedback:
+    frozen: true
+    epochs: 20
+    batch_size: 4
+    window_size: 12
+    learning_rate: 0.001
+    sample_num: 0.3
+    mask_rate: 0
+
+dynamic_graph:
+    source: jaeger_child_of_relations
+    node_policy: fixed_service_vocabulary
+    edge_policy: observed_per_time_bucket
+    empty_graph_policy: preserve_empty
+    bucket_seconds: 10
+    edge_features: [log1p_call_count, log1p_call_rate, log1p_mean_latency_ms, log1p_p95_latency_ms, error_rate]
+
+feature_augmentation:
+    source: Eadro_Drain3_templates_learned_from_normal_sessions
+    template_feature_dim: 7
+    uses_fault_labels: false
+    normalization_source: normal_training_samples_only

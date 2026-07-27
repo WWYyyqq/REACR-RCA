@@ -9,6 +9,16 @@ feat_dim:
     trace: 9
     log: 11
 
+# Inclusive feature-index spans; metric uses two non-contiguous blocks.
+modality_spans:
+    metric:
+        - [0, 52]
+        - [73, 129]
+    trace:
+        - [53, 61]
+    log:
+        - [62, 72]
+
 train_samples_num: whole # Number of training samples. Choose 'whole' if all samples are selected.
 
 model_param:

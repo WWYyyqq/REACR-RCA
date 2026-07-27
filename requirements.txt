@@ -4,3 +4,4 @@ PyYAML
 torch
 dgl
 
+scikit-learn

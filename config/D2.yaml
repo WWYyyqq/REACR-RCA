@@ -9,6 +9,15 @@ feat_dim:
     trace: 2
     log: 8
 
+# Inclusive feature-index spans matching the original D2 feature order.
+modality_spans:
+    metric:
+        - [0, 255]
+    trace:
+        - [256, 257]
+    log:
+        - [258, 265]
+
 train_samples_num: whole # Number of training samples. Choose 'whole' if all samples are selected.
 
 model_param:

@@ -203,10 +203,18 @@ class ModalLoss(nn.Module):
 # Loss_version_2
 # for feedback.
 class RankingLoss(nn.Module):
-    def __init__(self, rank_range):
+    def __init__(self, rank_range, margin=None):
         super(RankingLoss, self).__init__()
+        if rank_range <= 1:
+            raise ValueError('rank_range must be greater than 1')
         self.rank_range = rank_range
-        self.weights = torch.Tensor([(1/i) for i in range(1, rank_range+1)]) ** 1
+        self.margin = (1.0 / rank_range) if margin is None else float(margin)
+        if self.margin < 0:
+            raise ValueError('margin must be non-negative')
+        self.register_buffer(
+            'weights',
+            torch.tensor([(1 / i) for i in range(1, rank_range)], dtype=torch.float32),
+        )
 
     def forward(self, predicted_scores, labels):
         loss = []
@@ -214,8 +222,26 @@ class RankingLoss(nn.Module):
             end = start + self.rank_range
             tmp_s = predicted_scores[start:end]
             tmp_l = labels[start:end]
-            tmp_s = (tmp_s - torch.min(tmp_s))/(torch.max(tmp_s) - torch.min(tmp_s))
-            tmp_s = (torch.sort(tmp_s, descending=True).values - torch.mean(tmp_s[np.where(tmp_l==1)])) * self.weights
-            loss.append(torch.sum(tmp_s[tmp_s>0]))
+            positives = tmp_l > 0
+            negatives = ~positives
+            if not torch.any(positives) or not torch.any(negatives):
+                continue
+            # Service labels form a positive candidate bag.  Penalize nodes
+            # ranked above the best candidate rather than forcing every replica
+            # to receive the same score.  Operating on raw bounded scorer
+            # outputs avoids 1/(max-min) gradient explosions near ties.
+            positive_bag_score = torch.max(tmp_s[positives])
+            negative_scores = torch.sort(tmp_s[negatives], descending=True).values
+            violations = torch.relu(self.margin - positive_bag_score + negative_scores)
+            rank_weights = self.weights[: negative_scores.numel()].to(
+                device=violations.device,
+                dtype=violations.dtype,
+            )
+            loss.append(
+                torch.sum(violations * rank_weights)
+                / rank_weights.sum().clamp_min(1e-12)
+            )
+        if not loss:
+            return predicted_scores.mean() * 0.0
         return torch.mean(torch.stack(loss))
 # end Loss Function  ------------------------------------------

@@ -61,10 +61,23 @@ def export_intermediate_artifacts(
                 'input_features': _numpy(features),
                 'fused_features': _numpy(gate_output.get('fused_features')),
                 'temporal_states': _numpy(backbone_output.get('temporal_states')),
+                'topology_raw_features': _numpy(
+                    (backbone_output.get('topology_output') or {}).get('raw_features')
+                ),
                 'anomaly_score': _numpy(anomaly_output.get('anomaly_score')),
+                'reconstruction_prediction': _numpy(anomaly_output.get('reconstruction_prediction')),
+                'next_step_forecast': _numpy(anomaly_output.get('next_step_forecast')),
                 'causal_matrix': _numpy(causal_output.get('causal_matrix')),
+                'null_source_probability': _numpy(causal_output.get('null_source_probability')),
+                'lag_topology_mask': _numpy(causal_output.get('lag_topology_mask')),
+                'lag_alignment_topology_mask': _numpy(
+                    causal_output.get('lag_alignment_topology_mask')
+                ),
                 'lag_weights': _numpy(causal_output.get('lag_weights')),
                 'final_score': _numpy(rank_output.get('final_score')),
+                'source_role_score': _numpy(rank_output.get('source_role_score')),
+                'response_role_score': _numpy(rank_output.get('response_role_score')),
+                'role_margin': _numpy(rank_output.get('role_margin')),
                 'root_role_score': _numpy(rank_output.get('root_role_score')),
                 'symptom_role_score': _numpy(rank_output.get('symptom_role_score')),
                 'source_score': _numpy(rank_output.get('source_score')),
@@ -72,6 +85,8 @@ def export_intermediate_artifacts(
                 'incoming_explainedness': _numpy(rank_output.get('incoming_explainedness')),
                 'counterfactual_coverage': _numpy(rank_output.get('counterfactual_coverage')),
                 'counterfactual_residual': _numpy(rank_output.get('counterfactual_residual')),
+                'source_hypothesis_coverage': _numpy(rank_output.get('source_hypothesis_coverage')),
+                'source_hypothesis_residual': _numpy(rank_output.get('source_hypothesis_residual')),
             }
             compact_payload = {key: value for key, value in payload.items() if value is not None}
             batch_path = os.path.join(batch_dir, f'batch_{batch_idx:04d}.npz')
@@ -87,14 +102,25 @@ def export_intermediate_artifacts(
             labels = labels.cpu() if labels is not None else None
             for sample_idx in range(score.shape[0]):
                 for node_idx in range(score.shape[1]):
+                    is_label_candidate = int(
+                        labels is not None
+                        and labels[sample_idx, node_idx].item() > 0
+                    )
                     rows.append({
                         'case_id': int(batch['case_ids'][sample_idx].item()),
                         'case_timestamp': int(batch['case_timestamps'][sample_idx].item()),
                         'node_index': node_idx,
                         'node': index_to_node.get(node_idx, str(node_idx)),
-                        'is_root_label': int(labels is not None and labels[sample_idx, node_idx].item() > 0),
+                        'is_label_candidate': is_label_candidate,
+                        # Deprecated alias retained for historical readers.
+                        'is_root_label': is_label_candidate,
                         'anomaly_peak': float(anomaly[sample_idx, :, node_idx].max().item()),
                         'final_score': float(score[sample_idx, node_idx].item()),
+                        'source_role_score': float(rank_output['source_role_score'][sample_idx, node_idx].detach().cpu().item()),
+                        'response_role_score': float(rank_output['response_role_score'][sample_idx, node_idx].detach().cpu().item()),
+                        'source_hypothesis_coverage': float(rank_output['source_hypothesis_coverage'][sample_idx, node_idx].detach().cpu().item()),
+                        'source_hypothesis_residual': float(rank_output['source_hypothesis_residual'][sample_idx, node_idx].detach().cpu().item()),
+                        # Deprecated aliases retained for older analysis scripts.
                         'root_role_score': float(rank_output['root_role_score'][sample_idx, node_idx].detach().cpu().item()),
                         'symptom_role_score': float(rank_output['symptom_role_score'][sample_idx, node_idx].detach().cpu().item()),
                         'source_score': float(rank_output['source_score'][sample_idx, node_idx].detach().cpu().item()),

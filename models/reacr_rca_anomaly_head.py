@@ -30,7 +30,7 @@ class MultiHeadAnomalyHead(nn.Module):
         self.forecast_head = nn.Sequential(
             nn.Linear(hidden_dim, fusion_hidden_dim),
             nn.ReLU(),
-            nn.Linear(fusion_hidden_dim, hidden_dim),
+            nn.Linear(fusion_hidden_dim, feat_dim),
         )
         self.fusion_head = nn.Sequential(
             nn.Linear(4 if use_change_point else 3, fusion_hidden_dim),
@@ -62,24 +62,44 @@ class MultiHeadAnomalyHead(nn.Module):
 
     def forward(self, temporal_states: torch.Tensor, original_features: torch.Tensor) -> Dict[str, torch.Tensor]:
         # temporal_states: [B, W, N, H]
-        # original_features: [B, W, N, F]
+        # original_features: [B, W, N, F], after the optional modality gate.
         batch_size, window_size, node_num, hidden_dim = temporal_states.shape
 
         recon_pred = self.reconstruction_head(temporal_states)
         recon_error = torch.mean((recon_pred - original_features) ** 2, dim=-1)
+        reconstruction_loss = recon_error.mean()
 
-        temporal_shift = torch.zeros(batch_size, window_size, node_num, device=temporal_states.device)
+        temporal_shift = temporal_states.new_zeros(batch_size, window_size, node_num)
         temporal_shift[:, 1:, :] = torch.norm(
             temporal_states[:, 1:, :, :] - temporal_states[:, :-1, :, :],
             dim=-1,
             p=2,
         )
 
-        forecast_error = torch.zeros(batch_size, window_size, node_num, device=temporal_states.device)
+        # A forecast produced from h_t is aligned with its observation target
+        # x_{t+1}. The first time step has no preceding state, so its aligned
+        # error is explicitly zero and excluded from forecast_loss.
+        forecast_error = temporal_states.new_zeros(batch_size, window_size, node_num)
+        forecast_valid_mask = torch.zeros(
+            batch_size,
+            window_size,
+            node_num,
+            dtype=torch.bool,
+            device=temporal_states.device,
+        )
         if window_size > 1:
-            pred_next = self.forecast_head(temporal_states[:, :-1, :, :])
-            target_next = temporal_states[:, 1:, :, :]
-            forecast_error[:, 1:, :] = torch.mean((pred_next - target_next) ** 2, dim=-1)
+            next_step_forecast = self.forecast_head(temporal_states[:, :-1, :, :])
+            next_step_target = original_features[:, 1:, :, :]
+            forecast_error[:, 1:, :] = torch.mean(
+                (next_step_forecast - next_step_target) ** 2,
+                dim=-1,
+            )
+            forecast_valid_mask[:, 1:, :] = True
+            forecast_loss = forecast_error[:, 1:, :].mean()
+        else:
+            next_step_forecast = original_features[:, :0, :, :]
+            next_step_target = original_features[:, :0, :, :]
+            forecast_loss = temporal_states.sum() * 0.0
 
         component_list = [recon_error, temporal_shift, forecast_error]
         change_point_score = torch.zeros_like(recon_error)
@@ -92,9 +112,15 @@ class MultiHeadAnomalyHead(nn.Module):
         anomaly_score = F.softplus(anomaly_score)
 
         return {
+            'reconstruction_prediction': recon_pred,
             'recon_error': recon_error,
+            'reconstruction_loss': reconstruction_loss,
+            'next_step_forecast': next_step_forecast,
+            'next_step_target': next_step_target,
             'temporal_shift': temporal_shift,
             'forecast_error': forecast_error,
+            'forecast_valid_mask': forecast_valid_mask,
+            'forecast_loss': forecast_loss,
             'change_point_score': change_point_score,
             'anomaly_components': components,
             'anomaly_score': anomaly_score,
@@ -103,9 +129,15 @@ class MultiHeadAnomalyHead(nn.Module):
 
 def summarize_anomaly_output(output: Dict[str, torch.Tensor]) -> Dict[str, object]:
     return {
+        'reconstruction_prediction_shape': list(output['reconstruction_prediction'].shape),
         'recon_error_shape': list(output['recon_error'].shape),
+        'reconstruction_loss_shape': list(output['reconstruction_loss'].shape),
+        'next_step_forecast_shape': list(output['next_step_forecast'].shape),
+        'next_step_target_shape': list(output['next_step_target'].shape),
         'temporal_shift_shape': list(output['temporal_shift'].shape),
         'forecast_error_shape': list(output['forecast_error'].shape),
+        'forecast_valid_mask_shape': list(output['forecast_valid_mask'].shape),
+        'forecast_loss_shape': list(output['forecast_loss'].shape),
         'change_point_score_shape': list(output['change_point_score'].shape),
         'anomaly_components_shape': list(output['anomaly_components'].shape),
         'anomaly_score_shape': list(output['anomaly_score'].shape),

@@ -5,6 +5,7 @@ import torch.nn as nn
 from utils.public_functions import load_init
 from models.layers import ModalLoss
 from models.rc_scorer import naive_scorer, feedback, get_feedback_samples
+from models.reacr_rca_dsbg_dataset import root_label_matches_node_name
 
 # test: output the loss for each node
 def test(model, samples, node_hash, feat_span):
@@ -72,7 +73,8 @@ def evaluation(cases, k=5):
     topks = np.zeros(k)
     for _, case in cases.iterrows():
         for i in range(k):
-            if case['cmdb_id'] in case[f'Top{i+1}']:
+            predicted_node = str(case[f'Top{i+1}']).split(':', 1)[0]
+            if root_label_matches_node_name(case['cmdb_id'], predicted_node):
                 topks[i: ] += 1
                 break
     return np.round(topks / len(cases), 4)
