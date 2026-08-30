@@ -26,7 +26,10 @@ class CausalPropagationRanker(nn.Module):
         self.branch_hidden_dim = branch_hidden_dim
         self.eps = eps
         self.ranker_mode = ranker_mode
-        if self.ranker_mode not in {'legacy', 'root_symptom', 'counterfactual', 'source_hypothesis'}:
+        if self.ranker_mode not in {
+            'legacy', 'root_symptom', 'counterfactual', 'source_hypothesis',
+            'source_hypothesis_no_role',
+        }:
             raise ValueError(f'unsupported ranker_mode: {self.ranker_mode}')
 
         self.self_temporal = nn.GRU(input_size=1, hidden_size=branch_hidden_dim, batch_first=True)
@@ -342,18 +345,27 @@ class CausalPropagationRanker(nn.Module):
         root_role_score = source_role_score
         symptom_role_score = response_role_score
 
-        if self.ranker_mode in {'root_symptom', 'counterfactual', 'source_hypothesis'}:
+        if self.ranker_mode in {
+            'root_symptom', 'counterfactual', 'source_hypothesis',
+            'source_hypothesis_no_role',
+        }:
             final_score = (
                 positive_anchor_scale * anchor_score
                 + scaled_self
                 + scaled_outgoing
                 - scaled_incoming
                 + scaled_graph
-                + F.softplus(self.root_role_scale) * source_role_score
-                - F.softplus(self.symptom_role_scale) * response_role_score
             )
+            if self.ranker_mode != 'source_hypothesis_no_role':
+                final_score = (
+                    final_score
+                    + F.softplus(self.root_role_scale) * source_role_score
+                    - F.softplus(self.symptom_role_scale) * response_role_score
+                )
 
-        if self.ranker_mode in {'counterfactual', 'source_hypothesis'}:
+        if self.ranker_mode in {
+            'counterfactual', 'source_hypothesis', 'source_hypothesis_no_role',
+        }:
             final_score = (
                 final_score
                 + F.softplus(self.counterfactual_scale) * source_hypothesis_coverage

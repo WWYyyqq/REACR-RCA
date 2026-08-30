@@ -427,7 +427,11 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description='Audit actual topology dynamics in REACR-RCA DGL snapshots'
     )
-    parser.add_argument('--dataset', choices=['D1', 'D2'], default='D1')
+    parser.add_argument(
+        '--dataset',
+        default='D1',
+        help='dataset/config stem, e.g. D1, D1_weighted, D2, SN, or TT',
+    )
     parser.add_argument(
         '--config',
         default='',

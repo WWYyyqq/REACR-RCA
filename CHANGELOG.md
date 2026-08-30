@@ -1,5 +1,38 @@
 # Changelog
 
+## v3.1.0-reacr-rca (2026-08-30)
+
+### Added
+
+- Added `D1_weighted`, reconstructed from the original AIOps Jaeger spans as
+  minute-level instance call graphs with observed call mass, frequency,
+  mean/P95 latency, error rate, structural edges, and self-loops.
+- Added the D1 weighted-graph converter, audit documentation, configuration,
+  and regression tests without overwriting the historical unweighted D1 data.
+- Added reproducible RQ1--RQ6 experiment entry points for baseline comparison,
+  D1 core ablation, fault-type analysis, parameter sensitivity, dynamic-change
+  stratification, and controlled propagation evaluation.
+- Added source-response and zero-lag controls for separately evaluating lagged
+  relation evidence and role-aware ranking.
+- Added public baseline adapters and result-audit/report builders used by the
+  locked experiment protocol.
+
+### Changed
+
+- Extended implementation fingerprints to cover the D1 weighted converter.
+- Updated topology audits to distinguish edge-set, weight, and edge-attribute
+  changes and to report the observed D1 weighted graph statistics.
+- Updated the release documentation to use SN, TT, and D1_weighted as the
+  current dynamic datasets; D2 remains available only as a historical fixed-
+  topology compatibility dataset.
+- Expanded the regression suite from 61 tests in V3.0 to 79 tests in V3.1.
+
+### Compatibility
+
+- V3.0 and all earlier branches/tags remain unchanged.
+- Data, checkpoints, and large experiment outputs are not included in the
+  release.
+
 ## v3.0.0-reacr-rca (2026-07-27)
 
 ### Added

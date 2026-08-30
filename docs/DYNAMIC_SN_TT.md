@@ -47,7 +47,7 @@ Jaeger CHILD_OF spans
 ```bash
 python tools/convert_eadro_dynamic.py \
   --dataset both \
-  --input-root '/mnt/d/Users/wyq/shiyan/Eadro/chunks' \
+  --input-root '/path/to/Eadro/chunks' \
   --output-root data \
   --overwrite
 ```

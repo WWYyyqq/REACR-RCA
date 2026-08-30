@@ -1,23 +1,33 @@
 # REACR-RCA：动态拓扑感知的微服务根因候选排序
 
-当前正式代码版本为 `3.0.0-reacr-rca`。V3 在 V2.1 基线上系统修正了标签与评测语义、时间建模、动态图输入、时滞关系学习、源—响应解释和实验可复现性。V2.1 及更早版本的分支、标签和历史文档保持不变；由于模型与评测语义发生变化，旧结果不能直接作为 V3 的结果，主实验和消融实验需要按 V3 配置重新运行。
+当前正式代码版本为 `3.1.0-reacr-rca`。V3.1 在 V3.0 的动态关系排序框架上补充 D1 真实加权动态图、严格的核心组件消融和 RQ1–RQ6 可复现实验入口。V3.0 及更早版本的分支、标签和历史文档保持不变。
+
+## V3.1 相对 V3.0 的主要改进
+
+1. **新增 D1 真实加权动态图**：从原始 AIOps Jaeger Span 恢复分钟级实例调用，并构造调用量、频率、平均/P95 延迟和错误率等边属性；原始无权 D1 不被覆盖。
+2. **补充严格机制消融**：新增 `source_hypothesis_no_role` 与零时滞关系对照，使 LIPL、源—响应排序和候选源解释能够分别验证。
+3. **完善论文实验复现**：新增 RQ1 基线、D1 核心组件消融、故障类型分析、参数敏感性、动态图强度分层和受控传播实验脚本。
+4. **增强审计与防误用**：实现指纹纳入 D1 转换器；拓扑审计显式区分二值边集合、边权及边属性变化；D2 保留为历史固定拓扑数据，不进入当前论文主实验。
+5. **扩充回归测试**：覆盖 D1 父子 Span 重建、加权图构造、基线输出、严格消融、参数运行协议和受控传播数据，共 79 项测试。
 
 ## V3 相对 V2.1 的主要改进
 
 1. **真正消费时变图结构**：新增 8 维节点拓扑动态特征、逐时间步边/边属性聚合、`observed` 与 `freeze_first` 图序列模式，以及 changed/stable 分层评测；D1 的少量真实边变化可被使用，D2 明确作为固定拓扑退化情形。
 2. **新增 SN/TT 真实动态图数据路径**：从 Jaeger `CHILD_OF` span 按时间桶重建调用图，保留空图、动态边、调用次数和 5 维边属性，并采用会话隔离的数据划分，避免时间窗口跨会话或集合泄漏。
-3. **修正根因标签与排序口径**：标签匹配改为精确匹配或 `label + "-"` 边界安全前缀；服务级标签使用正候选袋和 any-hit 语义，主模型与 DeepHunt 基线均按袋内最高分训练。
-4. **修正时间建模**：时间注意力默认使用因果掩码，下一步预测改为预测真实下一观测；新增正常窗口重构/预测预训练和监督阶段辅助动态损失。
-5. **重构时滞关系学习**：使用样本与节点对特异的时滞权重、5D 时间对齐拓扑掩码、4D 时滞支持和空源概率，避免在无观测依赖时强制生成关系。
-6. **重构源—响应解释与排序**：源角色和响应角色改为独立概率；原“反事实传播”改为候选源假设覆盖率与对称残差；图先验从末帧扩展为完整窗口聚合。
-7. **增强跨服务校准**：新增不使用节点身份的统计校准器以及样本内神经/统计分数融合，用于 SN/TT 零样本场景；神经分数与融合分数可独立报告。
-8. **增强可审计性与复现性**：新增拓扑审计、固定拓扑真消融、实现指纹、候选语义字段、逐边预测时滞、统一 runner 和 61 项回归测试。
+3. **重建 D1 加权动态图**：从原始 AIOps Jaeger CSV 的 `trace_id/span_id/parent_span` 恢复 60 秒桶内的实例调用，计算调用次数、频率、平均/P95 延迟和错误率，同时保留 Pod--Node 部署边与自环；原无权 D1 不被覆盖。
+4. **修正根因标签与排序口径**：标签匹配改为精确匹配或 `label + "-"` 边界安全前缀；服务级标签使用正候选袋和 any-hit 语义，主模型与 DeepHunt 基线均按袋内最高分训练。
+5. **修正时间建模**：时间注意力默认使用因果掩码，下一步预测改为预测真实下一观测；新增正常窗口重构/预测预训练和监督阶段辅助动态损失。
+6. **重构时滞关系学习**：使用样本与节点对特异的时滞权重、5D 时间对齐拓扑掩码、4D 时滞支持和空源概率，避免在无观测依赖时强制生成关系。
+7. **重构源—响应解释与排序**：源角色和响应角色改为独立概率；原“反事实传播”改为候选源假设覆盖率与对称残差；图先验从末帧扩展为完整窗口聚合。
+8. **增强跨服务校准**：新增不使用节点身份的统计校准器以及样本内神经/统计分数融合，用于 SN/TT 零样本场景；神经分数与融合分数可独立报告。
+9. **增强可审计性与复现性**：新增拓扑审计、固定拓扑真消融、实现指纹、候选语义字段、逐边预测时滞、统一 runner 和完整回归测试。
 
 ## 版本与兼容性
 
 | 版本 | 分支 / 标签 | 说明 |
 | --- | --- | --- |
-| V3 | `release/v3.0.0-reacr-rca` / `v3.0.0-reacr-rca` | 当前正式代码版本；包含真实动态图路径、语义修正和可复现实验接口。 |
+| V3.1 | `release/v3.1.0-reacr-rca` / `v3.1.0-reacr-rca` | 当前正式代码版本；新增 D1 加权动态图和 RQ1–RQ6 复现实验。 |
+| V3.0 | `release/v3.0.0-reacr-rca` / `v3.0.0-reacr-rca` | 首个完整动态关系排序版本；内容保持不变。 |
 | V2.1 | `release/v2.1.0-reacr-rca` | V2 模块命名规范化版本；内容保持不变。 |
 | V2.0 | `v2.0.0-reacr-rca` | 根因—症状排序与旧反事实解释实现。 |
 | V1.1 | `v1.1.0-reacr-stable` | 稳定基线版本。 |
@@ -54,13 +64,15 @@ flowchart LR
 | 数据集 | 图快照 | 节点数 | 唯一有向边集 | 相邻快照拓扑切换 | 每快照边数 | 边属性/边权 |
 | --- | ---: | ---: | ---: | ---: | --- | --- |
 | D1 | 7,200 | 46 | 8 | 15 | 200、202、256、262、266、268 | 无 |
-| D2 | 14,400 | 18 | 1 | 0 | 固定为 66 | 无 |
+| D1_weighted | 7,200 | 46 | 5,192 | 6,696 | 128–268 | `weight` + 8 维 `edge_attr` |
+| D2（不用于当前论文） | 14,400 | 18 | 1 | 0 | 固定为 66 | 无 |
 
 因此：
 
 - D1 的序列化部署拓扑快照确实包含少量真实（非合成）边集变化，可以用于检验拓扑动态特征是否有效。按模型的 case 窗口统计，仅 `6/210`（2.86%）窗口包含拓扑变化；正常训练滑窗中为 `27/3705`，但这 27 个相互重叠的窗口只来自训练序列中的 3 次底层切换，不能当作 27 个独立部署事件。审计只能证明边集发生变化；若要把变化解释为扩缩容、重部署或故障传播，还需要额外部署/追踪证据。
-- D2 是固定拓扑数据。其节点属性仍随时间变化，但不能用来验证“拓扑演化建模”的贡献，也不能通过人为增删边将其改造成动态图。
-- 两个数据集都没有边权。模型只能使用无权有向边及其增删变化；不得声称利用了数据集提供的调用强度边权。
+- D1_weighted 以原始 D1 的相同 46 个节点、130 维节点特征和原训练/测试划分为基础，将旧 Pod--Pod 调用目录边替换为每分钟真实观察到的跨实例调用；全部 7,200 个快照都有调用边，调用权重签名在 7,199 个相邻时间对中均发生变化。
+- D2 是固定拓扑数据，不能验证拓扑演化建模，因此不再作为当前论文的数据集；历史配置与数据说明仅为兼容旧结果保留。
+- 原始处理版 D1 和 D2 均没有边权；论文主实验应使用独立的 D1_weighted，不能把新构造的 Trace 边权倒写成旧 D1 原生 `edata`。
 
 完整审计说明见 [`docs/TOPOLOGY_AUDIT.md`](docs/TOPOLOGY_AUDIT.md)。
 
@@ -93,6 +105,7 @@ DeepHunt 的候选袋损失直接作用于原始有界分数，不再做样本�
 | `models/reacr_rca_causal_ranker.py` | 聚合整段图序列与逐时刻异常的图先验，并计算独立源/响应角色及候选源假设覆盖/残差。 |
 | `models/reacr_rca_trainer.py` | 正候选袋 max 排序、弱相对角色约束、候选源解释、一致性与正常动态辅助训练。 |
 | `tools/reacr_rca_topology_audit.py` | 审计实际序列化图快照的边集、切换、边属性和来源。 |
+| `tools/convert_d1_weighted_dynamic.py` | 从 D1 原始 Jaeger Span 重建分钟级调用边及其调用量、延迟和错误率。 |
 | `tools/reacr_rca_final_study_runner.py` | 统一运行多 seed 主实验与消融实验。 |
 
 更完整的代码边界见 [`MANIFEST.md`](MANIFEST.md)，本轮语义修正见 [`docs/METHOD_CORRECTIONS.md`](docs/METHOD_CORRECTIONS.md)。
@@ -102,18 +115,16 @@ DeepHunt 的候选袋损失直接作用于原始有界分数，不再做样本�
 数据不随仓库提交。运行前需要准备：
 
 ```text
-data/D1/
+data/D1_weighted/
   cases.csv
   graphs_info/node_hash.pkl
   graphs_info/call_edges.pkl
+  graphs_info/structural_edges.pkl
   samples/train_samples.pkl
   samples/test_samples.pkl
-
-data/D2/
-  ... 同样结构 ...
 ```
 
-每个样本为 `(timestamp, graph, feature_tensor)`。图节点编号通过 `node_hash.pkl` 解释；审计确认 D1/D2 的快照节点数分别恒为 46/18，但节点语义一致性仍依赖数据生成阶段沿用同一编号映射。D1 的边集有少量变化，D2 的边集固定。`call_edges.pkl` 不作为拓扑审计或动态特征提取时的补边来源。
+每个样本为 `(timestamp, graph, feature_tensor)`。图节点编号通过 `node_hash.pkl` 解释。当前主实验使用 SN、TT 和 D1_weighted 的实际时间图快照；D2 仅保留为历史固定拓扑数据，不进入当前论文主实验。`call_edges.pkl` 仅记录观察调用边目录，不作为拓扑审计或动态特征提取时的补边来源。
 
 ## 运行与审计
 
@@ -121,21 +132,15 @@ data/D2/
 
 ```bash
 python -m tools.reacr_rca_topology_audit \
-  --dataset D1 \
-  --sample-dir data/D1/samples \
-  --output res/topology_audit_D1.json
-
-python -m tools.reacr_rca_topology_audit \
-  --dataset D2 \
-  --sample-dir data/D2/samples \
-  --output res/topology_audit_D2.json
+  --dataset D1_weighted \
+  --output data/D1_weighted/topology_audit.json
 ```
 
 单次开发运行示例：
 
 ```bash
 python reacr_rca_pipeline.py \
-  --dataset D1 --device cuda --seed 0 \
+  --dataset D1_weighted --device cuda --seed 0 \
   --case_split_protocol time_strict \
   --ranker_mode source_hypothesis \
   --enable_topology_dynamics \
@@ -154,7 +159,7 @@ python reacr_rca_pipeline.py \
 
 ```bash
 python -m tools.reacr_rca_final_study_runner \
-  --datasets D1 D2 \
+  --datasets SN TT D1_weighted \
   --mode all \
   --main_seeds 0 1 2 3 4 \
   --baseline_seeds 0 1 2 3 4 \
@@ -171,7 +176,7 @@ D2 没有逐时刻调用边观测，因此仍作为固定拓扑退化数据集�
 ```bash
 python tools/convert_eadro_dynamic.py \
   --dataset both \
-  --input-root '/mnt/d/Users/wyq/shiyan/Eadro/chunks' \
+  --input-root '/path/to/Eadro/chunks' \
   --output-root data \
   --overwrite
 
@@ -188,6 +193,24 @@ python reacr_rca_pipeline.py \
 
 SN 使用 10 秒桶和严格 120 秒故障窗口；TT 使用 60 秒桶和严格 600 秒故障窗口。窗口不会跨采集会话，同一会话不会跨训练/验证/测试集合。全量转换审计得到 SN/TT 分别 344/281 次边集切换和 987/289 次边权切换。详见 [SN/TT 动态图说明](docs/DYNAMIC_SN_TT.md)。
 
+## D1 真实加权动态图数据路径
+
+原始 AIOps-Dataset 的五份 `trace_jaeger-span.csv` 包含毫秒时间戳、实例名、`trace_id`、`span_id`、`parent_span`、持续时间和状态码。转换器以 60 秒聚合跨实例父子 Span，并为调用边生成调用次数、频率、平均/P95 延迟、错误率和三类边类型标记。Pod--Node 部署边和自环从同一时间戳的旧图中保留；旧 Pod--Pod 调用目录边被真实观察调用替换。
+
+```bash
+python -m tools.convert_d1_weighted_dynamic \
+  --raw-root '/path/to/Aiops-Dataset' \
+  --source-root '/path/to/processed/D1' \
+  --output-root data/D1_weighted \
+  --overwrite
+
+python reacr_rca_pipeline.py \
+  --dataset D1_weighted --device cuda --seed 0 \
+  --output_dir res/d1_weighted
+```
+
+本次全量审计处理 44,858,388 条 Span；五个文件的父子关系解析率均高于 99.99%，没有未映射实例、时间逆序行或迟到调用。结果包含 5,192 种边集合、6,696 次边集切换和 7,199 次调用权重签名切换。详细字段见 [`docs/D1_WEIGHTED_DYNAMIC.md`](docs/D1_WEIGHTED_DYNAMIC.md)。
+
 ## 拓扑贡献的必要消融
 
 至少使用相同数据划分、seed 和训练预算比较：
@@ -202,11 +225,11 @@ SN 使用 10 秒桶和严格 120 秒故障窗口；TT 使用 60 秒桶和严格 
 | `no_relation_topology_constraint` | `--relation_topology_mode none` | 移除关系候选的观测图约束。 |
 | `no_topology_change_oversampling` | `--normal_topology_change_oversample_factor 1` | 移除正常训练窗口的变化窗口过采样。 |
 
-`static_only` 不是“固定拓扑”：它只把显式变化特征置零，图卷积等分支仍能看到变化后的边集。因此，动态图结论不能只依赖主模型与 `static_only` 的差值；应同时报告 `frozen_window_topology`。D2 的动态通道恒为零且观测图本身固定，只能作为固定拓扑退化情形的健全性检查；主要动态图证据应来自 D1、SN 和 TT，并同时报告 changed/stable 分层结果。
+`static_only` 不是“固定拓扑”：它只把显式变化特征置零，图卷积等分支仍能看到变化后的边集。因此，动态图结论不能只依赖主模型与 `static_only` 的差值；应同时报告 `frozen_window_topology`。当前论文的动态图证据应来自 D1_weighted、SN 和 TT；D2 不进入主实验。
 
-由于 D1 的变化窗口非常稀少，正常窗口加载器默认对变化窗口使用权重 4（`--normal_topology_change_oversample_factor 4`）。这是训练采样策略，不改变原始数据分布；测试集不做过采样。结果必须同时报告 case 级 `topology_strata.changed/stable` 的样本数和 A@K，避免总体指标掩盖变化窗口表现。
+旧 D1 的变化窗口非常稀少；D1_weighted 的真实调用边几乎逐分钟变化，不再把旧 D1 的 `6/210` 稀疏变化结论用于新数据。正式结果仍须报告窗口级拓扑统计，并使用二值动态边、冻结窗口图和去除边属性等消融分别验证边集合与边权的贡献。
 
-实现级检查已在一个真实 D1 动态窗口（测试序列索引 `229:239`）上完成：该窗口边数出现 `268→256→268`，提取到 56 个非零动态特征；一次前向/反向后动态投影参数梯度范数为 `4.35×10^-4`。这证明当前计算图实际消费了观测到的边变化，但不证明其能提升定位性能；性能结论仍需完整多 seed 消融。
+实现级检查已在 D1_weighted 的最终重建数据上完成：8 个正常窗口都包含拓扑变化，前向过程提取到 2,676 个非零动态特征；一次正常预训练和一次根因训练后，动态投影梯度范数分别为 `1.48×10^-3` 和 `1.63×10^-3`，边证据梯度范数为 `7.15×10^-3`。这证明当前计算图实际消费了观察边变化及其属性，但不证明其能提升定位性能；性能结论仍需完整多 seed 消融。
 
 ## 输出与能力边界
 
@@ -224,5 +247,5 @@ SN 使用 10 秒桶和严格 120 秒故障窗口；TT 使用 60 秒桶和严格 
 - “根因标签”表示数据集给定的故障归因标识；服务级标签映射出的多个副本是候选集合，不意味着每个副本都是分别验证过的真实根因实例。
 - 正式 runner 对主模型和 DeepHunt 基线默认都使用 5 个 seed（0–4），消融默认使用 3 个 seed（0–2）；若论文要求全量五 seed 消融，必须显式传入 `--ablation_seeds 0 1 2 3 4`。runner 把版本号和关键代码/配置文件的 SHA-256 implementation fingerprint 写入运行清单；指纹不一致时不会静默复用旧结果。
 - changed/stable 的 case 数与 A@1/A@3/A@5 已进入 `all_runs.csv`、多 seed 汇总和最终 Markdown 报告，而不只保存在单次 `final_eval.json` 中。
-- 当前 61/61 项单元测试以及 D1/D2/SN/TT 真实数据小规模端到端运行均已通过。新增动态图测试覆盖流式 span 解析、真实空图、边权/边属性、会话边界、故障时间区间和分组无泄漏划分。SN、TT 均完成了正常预训练与监督训练各 1 epoch 的反向传播烟测，动态图和边证据梯度均非零；这些只证明实现、导出和数据路径可运行，不等于完整多 seed 性能收益证据。
-- V3 代码版本尚未给出新的正式五 seed 性能结果。任何性能、动态图收益或解释性结论，都应以重跑后的主实验、上述拓扑消融、changed/stable 分层指标和导出证据为准。
+- 当前 79/79 项单元测试以及 D1_weighted/SN/TT 真实数据小规模端到端运行均已通过。D1_weighted 的 1-epoch 烟测得到非零拓扑动态投影梯度 `1.63e-3` 和边证据梯度 `7.15e-3`；这些只证明实现与数据路径可运行，不等于完整多 seed 性能收益证据。
+- V3.1 不提交原始数据、模型权重或大规模实验产物。论文中的性能、动态图收益和机制结论应通过发布的锁定协议与实验脚本复现，不应从 smoke test 推导。

@@ -22,6 +22,7 @@ import argparse
 import gc
 import json
 import math
+import os
 import pickle
 import re
 from collections import defaultdict
@@ -998,7 +999,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--input-root",
         type=Path,
-        default=Path("/mnt/d/Users/wyq/shiyan/Eadro/chunks"),
+        default=Path(os.environ.get("REACR_EADRO_CHUNKS", "data/raw_eadro")),
     )
     parser.add_argument("--output-root", type=Path, default=Path("data"))
     parser.add_argument("--bucket-seconds", type=int, default=None)

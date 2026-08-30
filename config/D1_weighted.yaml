@@ -1,0 +1,76 @@
+dataset: D1_weighted_dynamic
+
+path:
+    case_dir: data/D1_weighted/cases.csv
+    graph_dir: data/D1_weighted/graphs_info/
+    sample_dir: data/D1_weighted/samples/
+
+feat_dim:
+    metric: 110
+    trace: 9
+    log: 11
+
+modality_spans:
+    metric:
+        - [0, 52]
+        - [73, 129]
+    trace:
+        - [53, 61]
+    log:
+        - [62, 72]
+
+data_settings:
+    window_size: 10
+    train_stride: 1
+    sample_interval_seconds: 60
+    max_gap_seconds: 120
+    train_incomplete_policy: drop
+    case_incomplete_policy: pad
+    case_split_protocol: time_strict
+
+train_samples_num: whole
+
+model_param:
+    num_layers: 2
+    in_dim: 130
+    hidden_dim: 64
+    out_dim: 32
+    edge_feature_dim: 8
+    topology_weight_gamma: 0.25
+    noise_rate: 0.3
+    epochs: 1000
+    batch_size: 64
+    learning_rate: 0.001
+    norm: none
+    aug_multiple: 3
+    feat_span:
+        - [0, 52]
+        - [73, 129]
+        - [53, 61]
+        - [62, 72]
+
+feedback:
+    frozen: true
+    epochs: 5
+    batch_size: 16
+    window_size: 10
+    learning_rate: 0.01
+    sample_num: 0.3
+    mask_rate: 0
+
+dynamic_graph:
+    source: aiops_d1_jaeger_parent_child_spans
+    bucket_seconds: 60
+    node_policy: preserve_original_46_node_vocabulary
+    call_edge_policy: observed_cross_instance_calls_per_time_bucket
+    structural_edge_policy: preserve_snapshot_deployment_edges_and_self_loops
+    latency_unit: milliseconds
+    edge_features:
+        - log1p_call_count
+        - log1p_call_rate
+        - log1p_mean_latency_ms
+        - log1p_p95_latency_ms
+        - error_rate
+        - is_call
+        - is_deployment
+        - is_self

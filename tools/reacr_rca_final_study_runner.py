@@ -29,6 +29,7 @@ def implementation_fingerprint():
     paths = [
         ROOT / 'reacr_rca_pipeline.py',
         ROOT / 'tools' / 'reacr_rca_final_study_runner.py',
+        ROOT / 'tools' / 'convert_d1_weighted_dynamic.py',
         ROOT / 'models' / 'rc_scorer.py',
         ROOT / 'models' / 'evaluation.py',
         ROOT / 'models' / 'train.py',
@@ -147,6 +148,16 @@ VARIANTS = {
         "relation_topology_mode": "none",
         "role": "ablation",
     },
+    "no_lag_relation": {
+        "ranker_mode": "source_hypothesis",
+        "enable_explanation_losses": True,
+        "weights": MAIN_WEIGHTS,
+        # A zero lag budget makes the relation support empty and therefore
+        # removes lagged directed-relation evidence without changing the graph
+        # encoder, anomaly scores, ranker architecture, or training budget.
+        "causal_max_lag": 0,
+        "role": "challenge2",
+    },
     "no_normal_dynamics_training": {
         "ranker_mode": "source_hypothesis",
         "enable_explanation_losses": True,
@@ -167,7 +178,12 @@ VARIANTS = {
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run the final REACR-RCA root-cause localization study.")
-    parser.add_argument("--datasets", nargs="+", default=["D1", "D2"])
+    parser.add_argument(
+        "--datasets",
+        nargs="+",
+        default=["SN", "TT", "D1_weighted"],
+        help="Current paper datasets; D2 is retained only for historical fixed-topology checks.",
+    )
     parser.add_argument("--base_dir", default=str(DEFAULT_BASE_DIR))
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--mode", choices=["all", "smoke", "main", "ablations", "baseline", "summarize"], default="all")
@@ -374,6 +390,8 @@ def build_pipeline_cmd(dataset, variant_name, variant, seed, epochs, out_dir, ar
         str(defaults["change_point_weight"]),
         "--causal_hidden_dim",
         str(defaults["causal_hidden_dim"]),
+        "--causal_max_lag",
+        str(variant.get("causal_max_lag", 3)),
         "--causal_gamma",
         str(defaults["causal_gamma"]),
         "--causal_kernel_size",

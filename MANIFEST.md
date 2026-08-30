@@ -1,4 +1,4 @@
-# REACR-RCA V3 Release Manifest
+# REACR-RCA V3.1 Release Manifest
 
 ## 主入口
 
@@ -6,6 +6,7 @@
 - `tools/reacr_rca_final_study_runner.py`：主模型/基线多 seed 主实验、消融、changed/stable 分层 CSV/Markdown 汇总、运行清单及 implementation fingerprint 校验。
 - `tools/reacr_rca_topology_audit.py`：只基于序列化 DGL 快照审计边集变化及边属性。
 - `tools/convert_eadro_dynamic.py`：把 SN/TT Jaeger span 流转换为会话感知、按时间桶组织的真实动态图快照。
+- `tools/convert_d1_weighted_dynamic.py`：从 D1 原始 Jaeger Span 重建分钟级实例调用、动态边权和边属性，不覆盖历史无权 D1。
 
 ## 当前方法实现
 
@@ -24,6 +25,7 @@
 ## 配置与数据接口
 
 - `config/D1.yaml`：130 维特征；metric 为 `[0,52]` 与 `[73,129]` 两个闭区间，trace 为 `[53,61]`，log 为 `[62,72]`。
+- `config/D1_weighted.yaml`：沿用 D1 节点特征与标签划分，使用从原始 Trace 重建的加权调用图及 8 维边属性。
 - `config/D2.yaml`：266 维特征；metric、trace、log 为连续且互斥的显式区间。
 - `config/SN.yaml`、`config/TT.yaml`：真实动态图窗口、会话分组划分、边属性和零样本校准配置。
 - `config/SN_TPL.yaml`：SN 日志模板增强实验配置。
@@ -58,14 +60,16 @@ DeepHunt `RankingLoss` 不再使用 min–max 或极差下界。它直接在有�
 - `tests/test_final_study_runner.py`：正式拓扑变体、D1 模态配置、基线安全标签匹配和 implementation fingerprint。
 - `tests/test_eadro_dynamic_graph.py`：SN/TT 流式 span、空图、边证据、故障窗口和会话无泄漏划分。
 - `tests/test_statistical_calibrator.py`：统计特征对齐、分类器保存/加载和融合边界。
+- `tests/test_d1_weighted_dynamic_converter.py`：父子 Span 连接、状态码归一化、调用边替换和结构边保留。
+- `tests/test_rq1_baselines.py`、`tests/test_rq2_d1_core_ablation.py`、`tests/test_rq3_lag_ablation.py`、`tests/test_rq4_parameter_sensitivity.py`、`tests/test_rq6_controlled_propagation.py`：锁定实验协议、严格消融和受控数据回归。
 
-当前单元测试为 61/61 通过，覆盖外部 `base_dir`、拓扑分层 summary/Markdown、偶数/非整数核拒绝和 DeepHunt 并列/近并列梯度。D1/D2 真实数据小规模端到端烟测的训练、评估、解释与导出均以退出码 0 完成；D2 真实 E2E 还验证了新增候选字段。这些检查不替代正式多 seed 实验。
+当前单元测试为 79/79 通过，覆盖 D1 加权图重建、外部 `base_dir`、拓扑分层 summary/Markdown、偶数/非整数核拒绝、严格机制消融和 DeepHunt 并列/近并列梯度。D1_weighted/SN/TT 真实数据小规模端到端烟测均已完成；这些检查不替代正式多 seed 实验。
 
 ## 运行身份与结果状态
 
 正式 runner 的主模型与 DeepHunt 基线默认 seed 均为 `0 1 2 3 4`，消融默认 seed 为 `0 1 2`；全量五 seed 消融需要显式传入 `--ablation_seeds 0 1 2 3 4`。运行清单记录 `VERSION` 以及管线、runner、REACR-RCA 模块、基线关键代码和 D1/D2 配置的 SHA-256 implementation fingerprint；已有目录的指纹不一致时不得静默复用结果。
 
-当前 V3 代码版本尚未完成可用于论文的五 seed 主实验和全部消融。D1 小规模烟测得到 5D mask `[8,3,10,46,46]`、动态投影梯度范数 `1.990379096e-4` 并成功写入 NPZ；D2 得到 `[4,3,10,18,18]` 且动态梯度为 0，符合固定拓扑预期。此前 D1 单窗口梯度 `0.0004352666` 的检查仍有效。这些只证明实现路径，不构成性能声明。
+V3.1 提供论文实验所需的锁定运行、汇总和审计入口，但不提交原始数据、模型权重或大规模结果目录。D1_weighted 的 smoke test 得到非零拓扑动态投影和边证据梯度，只证明实现路径实际消费动态边及其属性，不单独构成性能声明。
 
 ## 兼容字段
 
